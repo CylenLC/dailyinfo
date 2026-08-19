@@ -24,10 +24,24 @@ def fetch_and_pool():
         pool = []
 
     sources = [
-        {"name": "Solidot", "url": "https://www.solidot.org/index.rss"},
-        {"name": "V2EX", "url": "https://www.v2ex.com/index.xml"},
-        {"name": "Arxiv-AI", "url": "https://rss.arxiv.org/rss/cs.AI"}
+        {"name": "Google-AI-Blog", "url": "https://blog.google/technology/ai/rss/"}, # Gemini及基础研究
+        {"name": "HuggingFace-Blog", "url": "https://huggingface.co/blog/feed.xml"}, # 开源社区风向标
+        {"name": "DeepMind-Blog", "url": "https://deepmind.com/blog/feed/basic/"}, # 深度学习前沿进展
+
+        # --- 行业高频聚合与媒体 (High-frequency Tickers) ---
+        {"name": "Techmeme-AI", "url": "https://www.techmeme.com/feed.xml"}, # 科技圈公认最高效率的聚合流
+        {"name": "MIT-Tech-Review-AI", "url": "https://www.technologyreview.com/topic/artificial-intelligence/feed/"}, # 深度趋势分析
+        {"name": "VentureBeat-AI", "url": "https://venturebeat.com/category/ai/feed/"}, # 产业应用与投融资快讯
+        {"name": "MarkTechPost", "url": "https://www.marktechpost.com/feed/"}, # 极速总结最新论文与工具发布
+
+        # --- 深度研究与社区 (Deep Tech & Community) ---
+        {"name": "HF-Daily-Papers", "url": "https://papers.takara.ai/api/feed"}, # 社区维护的每日热门论文简报
+        {"name": "Reddit-ML", "url": "https://www.reddit.com/r/MachineLearning/.rss"}, # 开发者讨论最集中的地方
+    
+        # --- 中文垂直源 (Chinese Vertical) ---
+        {"name": "Synced-机器之心", "url": "https://www.jiqizhixin.com/rss"} # 国内最权威的AI垂直媒体
     ]
+    
     headers = {'User-Agent': 'Mozilla/5.0'}
     
     print(f"开始抓取 RSS 源... 当前池子已有 {len(pool)} 条素材")
