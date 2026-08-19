@@ -24,22 +24,27 @@ def fetch_and_pool():
         pool = []
 
     sources = [
+        {"name": "Arxiv-ML", "url": "https://rss.arxiv.org/rss/cs.LG"}, # 机器学习架构
+        {"name": "Arxiv-CV", "url": "https://rss.arxiv.org/rss/cs.CV"}, # 计算机视觉前沿
+        {"name": "HF-Daily-Papers", "url": "https://papers.takara.ai/api/feed"}, # 社区筛选的热门论文简报
+
+        # --- 2. 顶级实验室官方动态 (The Technical Source) ---
+        {"name": "OpenAI-News", "url": "https://openai.com/news/rss.xml"}, # 最权威的模型发布与政策更新
+        {"name": "DeepMind-Blog", "url": "https://deepmind.google/blog/feed/basic/"}, # 科学 AI (AlphaFold等) 的摇篮
+        {"name": "HuggingFace-Blog", "url": "https://huggingface.co/blog/feed.xml"}, # 开源生态与工程实践风向标
+        {"name": "Meta-AI-Blog", "url": "https://engineering.fb.com/category/ml-applications/feed/"}, # Llama 系列及大规模部署技术
         {"name": "Google-AI-Blog", "url": "https://blog.google/technology/ai/rss/"}, # Gemini及基础研究
-        {"name": "HuggingFace-Blog", "url": "https://huggingface.co/blog/feed.xml"}, # 开源社区风向标
-        {"name": "DeepMind-Blog", "url": "https://deepmind.com/blog/feed/basic/"}, # 深度学习前沿进展
 
-        # --- 行业高频聚合与媒体 (High-frequency Tickers) ---
-        {"name": "Techmeme-AI", "url": "https://www.techmeme.com/feed.xml"}, # 科技圈公认最高效率的聚合流
-        {"name": "MIT-Tech-Review-AI", "url": "https://www.technologyreview.com/topic/artificial-intelligence/feed/"}, # 深度趋势分析
-        {"name": "VentureBeat-AI", "url": "https://venturebeat.com/category/ai/feed/"}, # 产业应用与投融资快讯
-        {"name": "MarkTechPost", "url": "https://www.marktechpost.com/feed/"}, # 极速总结最新论文与工具发布
+        # --- 3. 学术期刊与权威机构 (Formal Academic Signals) ---
+        {"name": "Nature-Machine-Intelligence", "url": "http://feeds.nature.com/natmachintell/rss/current"}, # Nature 顶级 AI 刊物
+        {"name": "MIT-AI-News", "url": "https://news.mit.edu/topic/mitmachine-learning-rss.xml"}, # MIT 实验室的一手研究突破
+        {"name": "Science-Robotics", "url": "https://www.science.org/journal/scirobotics/rss"}, # 具身智能与机器人顶刊动态
 
-        # --- 深度研究与社区 (Deep Tech & Community) ---
-        {"name": "HF-Daily-Papers", "url": "https://papers.takara.ai/api/feed"}, # 社区维护的每日热门论文简报
+        # --- 4. 高频技术总结与中文视角 (Synthesis & Local Context) ---
+        {"name": "MarkTechPost", "url": "https://www.marktechpost.com/feed"}, # 极速论文摘要，适合快速过滤
+        {"name": "Techmeme-AI", "url": "https://www.techmeme.com/feed.xml"}, # 全球 AI 商业与技术的实时聚合流
+        {"name": "Synced-机器之心", "url": "https://www.jiqizhixin.com/rss"} # 国内最专业的科研论文深度解读媒体
         {"name": "Reddit-ML", "url": "https://www.reddit.com/r/MachineLearning/.rss"}, # 开发者讨论最集中的地方
-    
-        # --- 中文垂直源 (Chinese Vertical) ---
-        {"name": "Synced-机器之心", "url": "https://www.jiqizhixin.com/rss"} # 国内最权威的AI垂直媒体
     ]
     
     headers = {'User-Agent': 'Mozilla/5.0'}
