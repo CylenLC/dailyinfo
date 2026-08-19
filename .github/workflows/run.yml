@@ -2,9 +2,9 @@ name: Daily News Scraper
 
 on:
   schedule:
-    # 每天北京时间 08:45 (UTC 00:45)
-    - cron: '45 0 * * *'
-  workflow_dispatch: 
+    # 每天北京时间 08:30 准时触发
+    - cron: '30 0 * * *' 
+  workflow_dispatch:
 
 jobs:
   build:
