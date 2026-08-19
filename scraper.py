@@ -67,25 +67,33 @@ def upload_to_notion(content, title):
         "Content-Type": "application/json",
         "Notion-Version": "2022-06-28"
     }
-    # 将长文按 2000 字符切块，防止 Notion API 报错
-    blocks = []
-    for i in range(0, len(content), 2000):
-        blocks.append({
+    
+    # --- 核心修复：按 1000 字符切割，确保不触发 2000 字符的限制 ---
+    chunk_size = 1000
+    chunks = [content[i:i + chunk_size] for i in range(0, len(content), chunk_size)]
+    
+    # 构造 Notion 的子块结构
+    children_blocks = []
+    for chunk in chunks:
+        children_blocks.append({
             "object": "block",
             "type": "paragraph",
             "paragraph": {
-                "rich_text": [{"type": "text", "text": {"content": content[i:i+2000]}}]
+                "rich_text": [{"type": "text", "text": {"content": chunk}}]
             }
         })
 
     payload = {
         "parent": {"database_id": db_id},
-        "properties": {"Name": {"title": [{"text": {"content": title}}]}},
-        "children": blocks
+        "properties": {
+            "Name": {"title": [{"text": {"content": title}}]}
+        },
+        "children": children_blocks
     }
+    
     res = requests.post(url, headers=headers, json=payload)
     if res.status_code == 200:
-        print("✅ 熟食已送达 Notion！")
+        print("✅ 内容已完美同步至 Notion！")
     else:
         print(f"❌ 同步失败: {res.text}")
 
