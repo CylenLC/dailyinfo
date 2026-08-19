@@ -2,8 +2,8 @@ name: Daily News Scraper
 
 on:
   schedule:
-    - cron: '45 */4 * * *' # 每4小时运行一次，建议错峰设置
-  workflow_dispatch:      # 允许手动点击运行
+    - cron: '*/20 * * * *' 
+  workflow_dispatch:        # 保留这个，方便你手动点按钮
 
 jobs:
   build:
