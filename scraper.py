@@ -43,7 +43,7 @@ def fetch_and_pool():
         # --- 4. 高频技术总结与中文视角 (Synthesis & Local Context) ---
         {"name": "MarkTechPost", "url": "https://www.marktechpost.com/feed"}, # 极速论文摘要，适合快速过滤
         {"name": "Techmeme-AI", "url": "https://www.techmeme.com/feed.xml"}, # 全球 AI 商业与技术的实时聚合流
-        {"name": "Synced-机器之心", "url": "https://www.jiqizhixin.com/rss"} # 国内最专业的科研论文深度解读媒体
+        {"name": "Synced-机器之心", "url": "https://www.jiqizhixin.com/rss"},# 国内最专业的科研论文深度解读媒体
         {"name": "Reddit-ML", "url": "https://www.reddit.com/r/MachineLearning/.rss"}, # 开发者讨论最集中的地方
     ]
     
