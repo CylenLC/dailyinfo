@@ -86,14 +86,20 @@ def summarize_weekly(pool):
     return f"**【ai水文信息站】周报 | {beijing_time}**\n\n" + response.choices[0].message.content
 
 if __name__ == "__main__":
+    # 1. 抓取并存入池子（确保素材充裕）
     current_pool = fetch_and_pool()
-    now = datetime.datetime.utcnow()
     
-    # 调试技巧：如果你想现在就看总结，把下面这行改为 if True:
-    if now.weekday() == 6 and now.hour >= 14: 
-        print("--- 触发周日晚间总结模式 ---")
+    print(f"\n--- 验证模式：正在调集池中 {len(current_pool)} 条素材送往 DeepSeek ---")
+    
+    # 2. 强行调用 AI 进行深度提炼
+    if current_pool:
         report = summarize_weekly(current_pool)
+        print("\n" + "="*20 + " DeepSeek 创作结果 " + "="*20)
         print(report)
-        with open("weekly_pool.json", "w") as f: json.dump([], f)
+        print("="*58)
+        
+        # 3. 注意：验证阶段我们【不要】清空池子，防止你下次跑的时候没素材了
+        # with open("weekly_pool.json", "w") as f: json.dump([], f)
+        print("\n[提示] 已保留池中素材，方便你反复调试 Prompt。")
     else:
-        print(f"--- 蓄水模式：本周已存入 {len(current_pool)} 条硬核资讯 ---")
+        print("池子是空的，请检查抓取逻辑或关键词设置。")
