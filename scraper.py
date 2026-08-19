@@ -1,34 +1,104 @@
+import feedparser
+import hashlib
+import json
 import os
 import requests
-import json
 import datetime
+from openai import OpenAI
 
 # --- 配置区 ---
-NOTION_TOKEN = os.getenv("NOTION_TOKEN")
-DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
-DEEPSEEK_KEY = os.getenv("DEEPSEEK_API_KEY")
+# 关键词匹配，确保涵盖 AI 和水文科学
+KEYWORDS = ["AI", "智能体", "Agent", "模型", "架构", "水文", "科学", "OpenClaw", "DeepSeek", "GPT", "Claude", "AI4S", "算法", "Cursor", "编程"]
+client = OpenAI(api_key=os.getenv("DEEPSEEK_API_KEY"), base_url="https://api.deepseek.com")
+
+def fetch_and_pool():
+    """抓取素材并存入周池子"""
+    # 【测试模式】：暂时不读取 history，确保你能抓到这周所有内容
+    pool = [] 
+    sources = [
+        {"name": "Solidot", "url": "https://www.solidot.org/index.rss"},
+        {"name": "V2EX", "url": "https://www.v2ex.com/index.xml"},
+        {"name": "Arxiv-AI", "url": "https://rss.arxiv.org/rss/cs.AI"}
+    ]
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    
+    print("开始抓取 RSS 源...")
+    for s in sources:
+        try:
+            resp = requests.get(s['url'], headers=headers, timeout=20)
+            feed = feedparser.parse(resp.text)
+            for entry in feed.entries:
+                # 关键词过滤
+                if any(key.lower() in entry.title.lower() for key in KEYWORDS):
+                    new_item = {"title": entry.title, "link": entry.link, "source": s['name']}
+                    pool.append(new_item)
+        except Exception as e:
+            print(f"抓取 {s['name']} 失败: {e}")
+            continue
+    
+    # 将抓到的存入池子文件
+    with open("weekly_pool.json", "w", encoding='utf-8') as f: 
+        json.dump(pool, f, ensure_ascii=False, indent=2)
+    return pool
+
+def summarize_weekly(pool):
+    """召唤 DeepSeek 进行周度汇总"""
+    if not pool: return None
+    
+    bj_time = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime('%Y/%m/%d')
+    # 提取标题作为素材
+    text_content = "\n".join([f"- {i['title']} (来源: {i['source']})" for i in pool[:30]])
+    
+    prompt = f"""
+    你现在是《ai水文信息战》主笔。今天是 {bj_time}。
+    请根据以下本周收集的素材撰写一份深度周报。
+    要求：
+    1. 使用 Markdown 格式。
+    2. 板块标题使用 ### 搭配相关的 Emoji。
+    3. 语言风格要硬核、充满科技感和洞察力。
+    4. 结尾加上一段对“AI+水文”未来的简短寄语。
+
+    素材列表：
+    {text_content}
+    """
+    
+    print("正在召唤 DeepSeek 生成周报...")
+    response = client.chat.completions.create(
+        model="deepseek-chat", 
+        messages=[{"role": "user", "content": prompt}], 
+        max_tokens=2000, 
+        temperature=0.8
+    )
+    return response.choices[0].message.content
 
 def upload_to_notion(content, title):
+    """将生成的周报上传至 Notion，带自动配图和分段逻辑"""
+    token = os.getenv("NOTION_TOKEN")
+    db_id = os.getenv("NOTION_DATABASE_ID")
     url = "https://api.notion.com/v1/pages"
     headers = {
-        "Authorization": f"Bearer {NOTION_TOKEN}",
-        "Content-Type": "application/json",
-        "Notion-Version": "2022-06-28"
+        "Authorization": f"Bearer {token}",
+        "Notion-Version": "2022-06-28",
+        "Content-Type": "application/json"
     }
     
-    # 🌟 免费自动搜图
+    # 1. 自动配图（Unsplash 科技感大图）
     cover_image_url = "https://images.unsplash.com/photo-1550751827-4bd374c3f58b?auto=format&fit=crop&q=80&w=1000"
-
-    # 构造内容块（含自动切片逻辑）
+    
+    # 2. 文本切片（防止 Notion 400 错误）
     chunk_size = 1000
     chunks = [content[i:i + chunk_size] for i in range(0, len(content), chunk_size)]
     
-    children_blocks = [{
+    # 3. 构造子块
+    children_blocks = []
+    # 插入封面图
+    children_blocks.append({
         "object": "block",
         "type": "image",
         "image": { "type": "external", "external": { "url": cover_image_url } }
-    }]
+    })
     
+    # 插入正文
     for chunk in chunks:
         children_blocks.append({
             "object": "block",
@@ -37,7 +107,7 @@ def upload_to_notion(content, title):
         })
 
     payload = {
-        "parent": {"database_id": DATABASE_ID},
+        "parent": {"database_id": db_id},
         "properties": { "Name": {"title": [{"text": {"content": title}}]} },
         "children": children_blocks
     }
@@ -45,65 +115,29 @@ def upload_to_notion(content, title):
     res = requests.post(url, headers=headers, json=payload)
     return res.status_code == 200
 
-def main():
-    # 1. 这里的抓取逻辑保持你原来的不变，确保数据进入 weekly_pool.json
-    print("正在执行每日素材采集...")
-    # fetch_rss_to_pool() # 假设这是你原来的抓取函数名
+if __name__ == "__main__":
+    print("🚀 《ai水文信息战》自动化引擎启动...")
     
-    # 2. 判断日期：0 是周一
-    # 注意：北京时间周一早上 8:00 对应 UTC 周一 0:00
-    weekday = datetime.datetime.now().weekday()
+    # 1. 抓取并汇总
+    articles = fetch_and_pool()
     
-    if weekday == 0: 
-        print("🚀 检测到今天是周一，正在汇总本周素材并生成周报...")
+    # 2. 判断逻辑：测试期间我们只要运行就出货
+    # 等你测试好了，把下面这行改为 if datetime.datetime.now().weekday() == 0:
+    if True: 
+        print(f"📦 发现 {len(articles)} 条素材，正在生成并发布...")
+        report = summarize_weekly(articles)
         
-        # 读取池子里的内容
-        with open('weekly_pool.json', 'r', encoding='utf-8') as f:
-            pool = json.load(f)
-        
-        if pool:
-            # 调用 DeepSeek 生成总结（逻辑保持你原来的不变）
-            # report = generate_with_deepseek(pool)
-            
-            # 发送 Notion
-            title = f"ai水文信息战 · 周刊 ({datetime.date.today()})"
-            # 假设 report 是你生成的总结文字
-            success = upload_to_notion(report, title)
+        if report:
+            bj_date = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime('%Y-%m-%d')
+            success = upload_to_notion(report, f"AI水文周报 | {bj_date} (创刊号)")
             
             if success:
-                print("✅ 周报已送达 Notion！正在清空素材池...")
-                with open('weekly_pool.json', 'w', encoding='utf-8') as f:
-                    json.dump([], f) # 阅后即焚，重置池子
+                print("✅ 同步成功！正在执行阅后即焚...")
+                # 只有发布成功才清空池子
+                with open("weekly_pool.json", "w", encoding='utf-8') as f: 
+                    json.dump([], f)
+                print("🔥 池子已重置，等待下周素材。")
             else:
-                print("❌ 发送 Notion 失败，素材保留在池子中。")
+                print("❌ Notion 同步失败，请检查环境变量。")
         else:
-            print("本周没有新素材。")
-    else:
-        print(f"今天周{weekday+1}，仅完成素材入库，周一统一发布。")
-
-if __name__ == "__main__":
-    # --- 【测试模式：全量强制运行】 ---
-    print("🚀 测试模式启动：正在强制抓取并同步...")
-    
-    # 1. 抓取逻辑（由于 history.json 之前可能记住了链接，
-    # 如果你想强制重抓这周所有，可以手动在 GitHub 删掉 history.json 再跑）
-    current_pool = fetch_and_pool()
-    
-    # 2. 无论今天周几，都强制触发发送
-    if not current_pool:
-        print("⚠️ 警告：池子仍然是空的，可能是 RSS 源没有匹配到关键字。")
-    else:
-        print(f"📦 当前池子共有 {len(current_pool)} 条素材，准备出货...")
-        
-        # 3. 生成报告
-        report = summarize_weekly(current_pool)
-        
-        # 4. 发送 Notion
-        bj_date = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime('%Y-%m-%d')
-        upload_to_notion(report, f"【测试发布】AI水文周报 | {bj_date}")
-        
-        # 5. 测试期间为了反复看效果，可以【暂时不清空】池子
-        # 等你觉得排版完美了，再把下面这行取消注释，或者手动改回正式版逻辑
-        # with open("weekly_pool.json", "w") as f: json.dump([], f)
-        
-        print("✨ 测试任务完成！请检查 Notion。")
+            print("⚠️ 池子为空，本次任务无内容产出。")
