@@ -61,7 +61,7 @@ def summarize_weekly(pool):
 def upload_to_notion(content, title):
     token = os.getenv("NOTION_TOKEN")
     db_id = os.getenv("NOTION_DATABASE_ID")
-    url = "https://api.api.notion.com/v1/pages"
+    url = "https://api.notion.com/v1/pages"
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
