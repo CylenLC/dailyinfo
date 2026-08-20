@@ -60,6 +60,28 @@ def test_discover_venue_reports_private_submissions():
         provider.discover_venue()
 
 
+def test_authenticated_discover_venue_allows_public_notes_when_group_flag_is_false():
+    from openreview_provider import OpenReviewProvider
+
+    group = SimpleNamespace(
+        content={
+            "submission_name": {"value": "Submission"},
+            "public_submissions": {"value": False},
+        }
+    )
+    provider = OpenReviewProvider(
+        {"venue_id": "ICML.cc/2026/Conference"},
+        client=SimpleNamespace(get_group=lambda _venue: group),
+    )
+    provider._authenticated = True
+
+    capabilities = provider.discover_venue()
+
+    assert capabilities.submission_invitation == (
+        "ICML.cc/2026/Conference/-/Submission"
+    )
+
+
 def test_authenticated_public_only_filters_private_notes():
     from openreview_provider import OpenReviewProvider
 

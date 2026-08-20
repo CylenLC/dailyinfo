@@ -218,9 +218,9 @@ class OpenReviewProvider:
         group = self.client.get_group(self.venue_id)
         content = dict(_attr(group, "content", {}) or {})
         public_submissions = content_value(content, "public_submissions", None)
-        if public_submissions is False:
+        if public_submissions is False and not self._authenticated:
             raise OpenReviewNotPublic(
-                f"venue {self.venue_id} does not expose public submissions"
+                f"venue {self.venue_id} does not expose public submissions to guests"
             )
         submission_name = content_value(content, "submission_name", "")
         submission_id = content_value(content, "submission_id", "")
