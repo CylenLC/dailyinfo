@@ -921,7 +921,7 @@ def test_pipeline_resource_unified_news_saves_single_file(
     fake_requests.register("https://news.dlut.test/zhxw.htm", FakeResponse(200, html))
     fake_requests.register("https://news.dlut.test/xsky.htm", FakeResponse(200, html))
 
-    saved = rp.run_pipeline_resource()
+    rp.run_pipeline_resource()
 
     today = datetime.now().strftime("%Y-%m-%d")
     unified = BRIEFINGS_DIR / "resource" / f"dlut_news_briefing_{today}.md"
@@ -972,8 +972,6 @@ def test_pipeline_resource_url_dedup_across_sections(
     """Same URL appearing in two sections should only appear once in prompt."""
     import json
     import run_pipelines as rp
-    from paths import BRIEFINGS_DIR
-
     from datetime import datetime
 
     now = datetime.now()

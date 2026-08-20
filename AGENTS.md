@@ -39,9 +39,12 @@
 
 ```bash
 python3 scripts/run_pipelines.py              # 运行全部
-python3 scripts/run_pipelines.py --pipeline 1  # 仅 RSS 学术简报
-python3 scripts/run_pipelines.py --pipeline 2  # 仅技术趋势
-python3 scripts/run_pipelines.py --pipeline 3  # 仅大工院所资讯
+python3 scripts/run_pipelines.py --pipeline 1  # 期刊论文
+python3 scripts/run_pipelines.py --pipeline 2  # AI 资讯
+python3 scripts/run_pipelines.py --pipeline 3  # arXiv CS.AI
+python3 scripts/run_pipelines.py --pipeline 4  # 技术趋势
+python3 scripts/run_pipelines.py --pipeline 5  # 大工院所资讯
+python3 scripts/run_pipelines.py --pipeline 6  # OpenReview 顶会论文事件
 
 # 或使用 CLI（uv pip install -e . 后可用）
 dailyinfo run

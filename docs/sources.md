@@ -2,8 +2,8 @@
 
 This page is generated from [`config/sources.json`](https://github.com/iHeadWater/dailyinfo/blob/main/config/sources.json).
 
-| Name | Display Name | Category | Type | Enabled | Lookback Hours | URL |
-|------|--------------|----------|------|---------|----------------|-----|
+| Name | Display Name | Category | Type | Enabled | Poll/Lookback Hours | URL |
+|------|--------------|----------|------|---------|---------------------|-----|
 | nature | Nature | papers | rss | True | 24 | https://www.nature.com/nature.rss |
 | nature_communications | Nature Communications | papers | rss | True | 24 | https://www.nature.com/ncomms.rss |
 | scientific_data | Scientific Data | papers | rss | True | 24 | https://www.nature.com/sdata.rss |
@@ -57,3 +57,6 @@ This page is generated from [`config/sources.json`](https://github.com/iHeadWate
 | dlut_recruitment | 大连理工大学 - 招聘信息 | resource | api | True | 24 | https://job.dlut.edu.cn/f/recruitmentinfo/ajax_frontRecruitinfo |
 | dlut_internship | 大连理工大学 - 实习信息 | resource | api | True | 24 | https://job.dlut.edu.cn/f/recruitmentinfo/ajax_frontRecruitinfo |
 | dlut_transfer_recruitment | 大连理工大学 - 选调生 | resource | api | True | 24 | https://job.dlut.edu.cn/f/recruitmentinfo/ajax_frontRecruitinfo |
+| openreview_iclr_2026 | ICLR 2026 | conference | api | True | 168 |  |
+| openreview_icml_2026 | ICML 2026 | conference | api | True | 168 |  |
+| openreview_neurips_2026 | NeurIPS 2026 | conference | api | True | 24 |  |

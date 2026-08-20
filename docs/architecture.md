@@ -39,6 +39,7 @@ DailyInfo 是面向 AI for Science 研究者的自动化情报聚合与精读系
 │  │  • Pipeline 3: arXiv CS.AI → AI summary → briefings/arxiv    │   │
 │  │  • Pipeline 4: Code trending → AI summary → briefings/code   │   │
 │  │  • Pipeline 5: University news → AI summary → briefings/res. │   │
+│  │  • Pipeline 6: OpenReview events → briefings/conference      │   │
 │  │                                                              │   │
 │  │  DeepSeek V4 Pro API (primary); OpenRouter fallback (kimi-k2.5)    │   │
 │  └──────────────────────────────────────────────────────────────┘   │
@@ -111,6 +112,15 @@ DailyInfo 是面向 AI for Science 研究者的自动化情报聚合与精读系
 - **Input**: DLUT 网站（HTML + API）
 - **Output**: `briefings/resource/`
 
+### Pipeline 6: OpenReview Conference Papers
+- **Input**: OpenReview API v2 submissions and public forum replies
+- **Output**: `briefings/conference/`
+- **状态**：`state/openreview.sqlite3` 保存 venue 水位线、相关论文快照和确定性事件
+- **增量**：submission 水位线 + 已相关论文 forum 轮询 + 周期性全量校准
+- **可恢复处理**：显式 API 分页，每页提交 `after` cursor；`sync_runs`/`sync_items` 保存 discovery、相关度、forum 阶段和 heartbeat，Ctrl-C 或网络失败后可续跑
+- **进度**：日志输出 discovery/judging/forum/rendering 阶段、当前数量、候选数、错误数和 run ID；`dailyinfo status` 显示活跃/中断 run
+- **认证**：默认 guest；可选用户名/密码认证，但 `public_only` 默认过滤非公开 note/字段
+
 ## Discord Channel Mapping
 
 频道 ID 由 `.env` 配置（不在代码里硬编码）：
@@ -122,6 +132,7 @@ DailyInfo 是面向 AI for Science 研究者的自动化情报聚合与精读系
 | arxiv    | `DISCORD_CHANNEL_ARXIV` (falls back to `DISCORD_CHANNEL_AI_NEWS`) | `_ARXIV_DEV` | `_ARXIV_STAGING` |
 | code     | `DISCORD_CHANNEL_CODE` | `_CODE_DEV` | `_CODE_STAGING` |
 | resource | `DISCORD_CHANNEL_RESOURCE` | `_RESOURCE_DEV` | `_RESOURCE_STAGING` |
+| conference | `DISCORD_CHANNEL_CONFERENCE` | `_CONFERENCE_DEV` | `_CONFERENCE_STAGING` |
 
 Set `DAILYINFO_ENV=dev` or `staging` to use the suffixed keys. If the suffixed
 key is empty, dev/staging falls back to the prod channel with a warning.

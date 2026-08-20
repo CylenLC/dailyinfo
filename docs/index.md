@@ -6,7 +6,7 @@ DailyInfo is an automated research intelligence collector for AI for Science res
 
 ## How It Works
 
-One pipeline, five independent sources of information:
+One pipeline, six independent sources of information:
 
 ```text
 FreshRSS / scrape / API sources
@@ -16,7 +16,7 @@ FreshRSS / scrape / API sources
   -> Discord channels + local archive
 ```
 
-1. **Collect** — five independent pipelines pull from 40+ feeds, pages, and APIs. A failure in one never blocks the others.
+1. **Collect** — six independent pipelines pull from 40+ feeds, pages, and APIs. A failure in one never blocks the others.
 2. **Summarize** — DeepSeek writes a readable Chinese briefing per source, tuned for researchers: what the papers are, why they matter, and what's worth a closer look.
 3. **Deliver** — briefings land in your Discord channels and are archived locally. Nothing is ever sent twice.
 
@@ -26,7 +26,7 @@ You wake up to a curated digest of everything relevant to your field — no feed
 
 | | |
 |---|---|
-| **Five pipelines** | Papers (30+ journals, including Chinese water-resources journals) · AI news · arXiv CS.AI (up to 500 preprints/day) · GitHub trending + HuggingFace models · University updates |
+| **Six pipelines** | Journal papers · AI news · arXiv CS.AI · GitHub + HuggingFace trends · University updates · OpenReview conference papers and public review events |
 | **Chinese-first briefings** | AI summaries in Chinese with automatic fallback to an OpenRouter model when the primary API fails |
 | **Configuration-driven** | Add RSS, scrape, or API sources in `config/sources.json` — no code changes required |
 | **Idempotent & safe to rerun** | Sources with today's briefing are skipped; pushed files are never re-sent |
@@ -71,12 +71,14 @@ Default data root: `~/.myagentdata/dailyinfo/`. Override it with `DAILYINFO_DATA
 │   ├── ai_news/
 │   ├── arxiv/
 │   ├── code/
+│   ├── conference/
 │   └── resource/
 └── pushed/              # Successfully pushed archive
     ├── papers/
     ├── ai_news/
     ├── arxiv/
     ├── code/
+    ├── conference/
     └── resource/
 ```
 
@@ -112,6 +114,8 @@ dailyinfo push
 | `dailyinfo run -p 3` | Pipeline 3: arXiv CS.AI |
 | `dailyinfo run -p 4` | Pipeline 4: code trending |
 | `dailyinfo run -p 5` | Pipeline 5: university/resource |
+| `dailyinfo run -p 6` | Pipeline 6: OpenReview conference papers |
+| `dailyinfo run -p 6 --source openreview_iclr_2026` | Run one conference source only |
 | `dailyinfo run -f all` | Force regeneration for all sources |
 | `dailyinfo push` | Push pending briefings to Discord and archive them |
 | `dailyinfo push -d 2026-04-22` | Push briefings for a specific date |
@@ -128,7 +132,8 @@ dailyinfo push
 |----------|---------|
 | `DEEPSEEK_API_KEY` | DeepSeek API key (primary model for `dailyinfo run`) |
 | `DISCORD_BOT_TOKEN` | Discord bot token for `dailyinfo push` |
-| `DISCORD_CHANNEL_PAPERS` / `_AI_NEWS` / `_ARXIV` / `_CODE` / `_RESOURCE` | Optional category channel IDs |
+| `DISCORD_CHANNEL_PAPERS` / `_AI_NEWS` / `_ARXIV` / `_CODE` / `_RESOURCE` / `_CONFERENCE` | Optional category channel IDs |
+| `OPENREVIEW_USERNAME` / `OPENREVIEW_PASSWORD` | Optional OpenReview authentication; set both (public-only push remains the default) |
 | `FRESHRSS_USER` | FreshRSS username |
 | `FRESHRSS_PASSWORD` | FreshRSS initial password |
 | `DAILYINFO_DATA_ROOT` | Override default data root |

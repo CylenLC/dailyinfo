@@ -854,7 +854,7 @@ def run_pipeline_code() -> int:
             continue
 
         if not items:
-            log(f"    no items")
+            log("    no items")
             continue
 
         log(f"    {len(items)} items")
@@ -947,7 +947,7 @@ def _generate_unified_news(
             f"\U0001f4ed 过去 48 小时无新内容\n"
         )
         save("resource", f"{_DLUT_NEWS_GROUP}_briefing_{DATE}.md", placeholder)
-        log(f"    no updates -> placeholder")
+        log("    no updates -> placeholder")
         return 1
 
     section_parts = []
@@ -1034,7 +1034,7 @@ def run_pipeline_resource() -> int:
             )
             save("resource", f"{ds.name}_briefing_{DATE}.md", no_update)
             saved += 1
-            log(f"    no updates -> placeholder")
+            log("    no updates -> placeholder")
             continue
 
         log(f"    {len(items)} items (within {ds.lookback_hours}h)")
