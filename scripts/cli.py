@@ -377,7 +377,7 @@ def status():
                             f"phase={item.get('run_phase') or '-'} "
                             f"fetched={item.get('run_fetched', 0)}/{total} "
                             f"candidates={item.get('run_candidates', 0)} "
-                            f"evaluated={item.get('run_judged', 0)} "
+                            f"evaluated={item.get('run_evaluated', 0)} "
                             f"relevant={item.get('run_relevant', 0)}"
                         )
         except Exception as exc:
@@ -413,12 +413,30 @@ def _source_url(source_name: str) -> str:
     show_default=True,
     help="Configured source name whose FreshRSS cache should be cleared.",
 )
-@click.option("--url", default="", help="Explicit feed URL to clear instead of --source.")
-@click.option("--all-stale", is_flag=True, help="Clear every stale SimplePie cache entry.")
-@click.option("--max-age", default=24, show_default=True, help="Stale threshold in hours for --all-stale.")
-@click.option("--dry-run", is_flag=True, help="Show what would be deleted without deleting.")
-@click.option("--refresh", is_flag=True, help="Run FreshRSS actualize_script.php after clearing.")
-@click.option("--container", default="dailyinfo_freshrss", show_default=True, help="FreshRSS container name for --refresh.")
+@click.option(
+    "--url", default="", help="Explicit feed URL to clear instead of --source."
+)
+@click.option(
+    "--all-stale", is_flag=True, help="Clear every stale SimplePie cache entry."
+)
+@click.option(
+    "--max-age",
+    default=24,
+    show_default=True,
+    help="Stale threshold in hours for --all-stale.",
+)
+@click.option(
+    "--dry-run", is_flag=True, help="Show what would be deleted without deleting."
+)
+@click.option(
+    "--refresh", is_flag=True, help="Run FreshRSS actualize_script.php after clearing."
+)
+@click.option(
+    "--container",
+    default="dailyinfo_freshrss",
+    show_default=True,
+    help="FreshRSS container name for --refresh.",
+)
 def cache_clear(source, url, all_stale, max_age, dry_run, refresh, container):
     """Clear FreshRSS SimplePie cache files for stuck feeds (see issue #57)."""
     sys.path.insert(0, str(PROJECT_ROOT / "scripts"))

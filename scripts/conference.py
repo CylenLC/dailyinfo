@@ -24,7 +24,7 @@ from openreview_provider import (
     invitation_matches,
 )
 
-STATE_SCHEMA_VERSION = 2
+STATE_SCHEMA_VERSION = 3
 RUN_ACTIVE = "RUNNING"
 RUN_INTERRUPTED = "INTERRUPTED"
 RUN_COMPLETE = "COMPLETE"
@@ -128,7 +128,7 @@ def lexical_recall(paper: dict, filters: dict | None = None) -> bool:
     """High-recall lexical retrieval seam.
 
     A future embedding retriever can be combined with this function without
-    changing the final relevance-judge or conference event contracts.
+    changing the retrieval or conference event contracts.
     """
 
     filters = filters or {}
@@ -602,7 +602,7 @@ class ConferenceState:
                     fetched_count INTEGER NOT NULL DEFAULT 0,
                     scanned_count INTEGER NOT NULL DEFAULT 0,
                     candidate_count INTEGER NOT NULL DEFAULT 0,
-                    judged_count INTEGER NOT NULL DEFAULT 0,
+                    evaluated_count INTEGER NOT NULL DEFAULT 0,
                     relevant_count INTEGER NOT NULL DEFAULT 0,
                     forum_done_count INTEGER NOT NULL DEFAULT 0,
                     event_count INTEGER NOT NULL DEFAULT 0,
@@ -637,6 +637,11 @@ class ConferenceState:
             if current and int(current["value"]) > STATE_SCHEMA_VERSION:
                 raise RuntimeError(
                     f"unsupported conference state schema {current['value']}"
+                )
+            if current and int(current["value"]) < STATE_SCHEMA_VERSION:
+                raise RuntimeError(
+                    "conference state schema is outdated; remove the state database "
+                    "and run Pipeline 6 again"
                 )
             conn.execute(
                 "INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)",
@@ -785,7 +790,7 @@ class ConferenceState:
             "fetched_count",
             "scanned_count",
             "candidate_count",
-            "judged_count",
+            "evaluated_count",
             "relevant_count",
             "forum_done_count",
             "event_count",
@@ -1136,8 +1141,8 @@ class ConferenceState:
                      ORDER BY r.updated_ms DESC LIMIT 1) run_total
                    ,(SELECT r.candidate_count FROM sync_runs r WHERE r.source=v.source
                      ORDER BY r.updated_ms DESC LIMIT 1) run_candidates
-                   ,(SELECT r.judged_count FROM sync_runs r WHERE r.source=v.source
-                     ORDER BY r.updated_ms DESC LIMIT 1) run_judged
+                   ,(SELECT r.evaluated_count FROM sync_runs r WHERE r.source=v.source
+                     ORDER BY r.updated_ms DESC LIMIT 1) run_evaluated
                    ,(SELECT r.relevant_count FROM sync_runs r WHERE r.source=v.source
                      ORDER BY r.updated_ms DESC LIMIT 1) run_relevant
                    FROM venues v ORDER BY v.source"""
@@ -1344,7 +1349,6 @@ def _run_config_hash(
             "min_cdate": min_cdate,
             "filters": config.get("filters", {}),
             "retrieval": config.get("retrieval", {}),
-            "relevance": config.get("relevance", {}),
             "model": model,
         }
     )
@@ -1501,7 +1505,7 @@ def run_conference_source(
         fetched = int(run.get("fetched_count") or 0)
         scanned = int(run.get("scanned_count") or 0)
         candidates = int(run.get("candidate_count") or 0)
-        judged_during_discovery = int(run.get("judged_count") or 0)
+        evaluated_during_discovery = int(run.get("evaluated_count") or 0)
         relevant_during_discovery = int(run.get("relevant_count") or 0)
         watermark_candidate = run.get("watermark_candidate_ms")
         for page in _iter_submission_pages(
@@ -1574,14 +1578,14 @@ def run_conference_source(
                         if cached_relevance.get("relevant")
                         else "IRRELEVANT"
                     )
-                    judged_during_discovery += 1
+                    evaluated_during_discovery += 1
                     is_relevant = bool(cached_relevance.get("relevant"))
                     candidates += int(is_relevant)
                     relevant_during_discovery += int(is_relevant)
                 elif use_embeddings:
                     decision = embedding_decisions[forum_id]
                     stage = "PENDING_FORUM" if decision.relevant else "IRRELEVANT"
-                    judged_during_discovery += 1
+                    evaluated_during_discovery += 1
                     candidates += int(decision.relevant)
                     relevant_during_discovery += int(decision.relevant)
                 else:
@@ -1592,7 +1596,7 @@ def run_conference_source(
                     )
                     state.set_relevance(source, forum_id, metadata_hash, decision)
                     stage = "PENDING_FORUM" if decision.relevant else "IRRELEVANT"
-                    judged_during_discovery += 1
+                    evaluated_during_discovery += 1
                     candidates += int(decision.relevant)
                     relevant_during_discovery += int(decision.relevant)
                 staged.append(
@@ -1621,7 +1625,7 @@ def run_conference_source(
             )
             state.update_run(
                 run_id,
-                judged_count=judged_during_discovery,
+                evaluated_count=evaluated_during_discovery,
                 relevant_count=relevant_during_discovery,
             )
             emit(
@@ -1653,50 +1657,12 @@ def run_conference_source(
             )
 
     errors = int(run.get("error_count") or 0)
-    judged = int(run.get("judged_count") or 0)
+    evaluated = int(run.get("evaluated_count") or 0)
     relevant_count = int(run.get("relevant_count") or 0)
     forum_done = int(run.get("forum_done_count") or 0)
     event_count = int(run.get("event_count") or 0)
 
-    # Old checkpoints may contain items staged for the removed DeepSeek judge.
-    # Resolve them with the same local retrieval policy used during discovery.
     state.update_run(run_id, phase="RETRIEVAL")
-    legacy_items = state.sync_items(run_id, ("PENDING_JUDGE", "JUDGE_RETRY"))
-    legacy_scores: list[float | None] = [None] * len(legacy_items)
-    if legacy_items and use_embeddings:
-        assert embedding_client is not None
-        legacy_scores = list(
-            embedding_client.score_papers([item["paper"] for item in legacy_items])
-        )
-        if len(legacy_scores) != len(legacy_items):
-            raise RuntimeError(
-                "embedding retriever returned a mismatched number of legacy scores"
-            )
-    for index, (item, score) in enumerate(
-        zip(legacy_items, legacy_scores, strict=True), 1
-    ):
-        paper = item["paper"]
-        lexical_hit = bool(
-            use_lexical and candidate_retriever(paper, config.get("filters"))
-        )
-        decision = _retrieval_decision(
-            lexical_hit=lexical_hit,
-            embedding_score=score,
-            embedding_config=embedding_config,
-        )
-        state.set_relevance(source, item["forum_id"], item["metadata_hash"], decision)
-        state.update_sync_item(
-            run_id,
-            item["forum_id"],
-            "PENDING_FORUM" if decision.relevant else "IRRELEVANT",
-        )
-        judged += 1
-        relevant_count += int(decision.relevant)
-        state.update_run(run_id, judged_count=judged, relevant_count=relevant_count)
-        emit(
-            f"[{display_name}][RETRIEVAL] recovered {index}/{len(legacy_items)} "
-            f"relevant={relevant_count}"
-        )
 
     state.update_run(run_id, phase="FORUM_POLL")
     forum_items = state.sync_items(run_id, ("PENDING_FORUM", "FORUM_RETRY"))
@@ -1775,7 +1741,7 @@ def run_conference_source(
         f"[{display_name}] {'COMPLETE' if not errors else 'INTERRUPTED'} "
         f"{outcome} run={run_id[:8]} "
         f"scanned={run.get('scanned_count', 0)} candidates={run.get('candidate_count', 0)} "
-        f"evaluated={judged} relevant={relevant_count} events={event_count} "
+        f"evaluated={evaluated} relevant={relevant_count} events={event_count} "
         f"saved={rendered} errors={errors}"
     )
     return ConferenceRunResult(

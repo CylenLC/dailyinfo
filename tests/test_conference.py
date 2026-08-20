@@ -35,7 +35,6 @@ def _config():
             "exclude_phrases": ["watermark"],
         },
         "retrieval": {"strategy": "lexical", "version": 3},
-        "relevance": {"ai_judge": False, "version": 3},
         "reviews": {
             "rating_options": RATING_OPTIONS,
             "min_reviews_for_signal": 1,
@@ -149,7 +148,6 @@ def test_briefing_prompt_requests_raw_ratings_without_internal_disclaimer():
     assert "Link To Code" in prompt
     assert "Reviewer 1" in prompt
     assert "Rebuttal / Author Response" in prompt
-    assert "不得写成 DeepSeek 或 AI 相关度评分" in prompt
     assert "不要输出事件类型" in prompt
 
 
@@ -191,7 +189,6 @@ def test_pipeline_is_idempotent_and_detects_review_update(tmp_path):
 
     def fake_ai(prompt, model="test", max_tokens=0):
         calls.append(prompt)
-        assert "相关度判定器" not in prompt
         return "### HydroCast\n\n公开状态：Accept (Poster)\n\n[OpenReview](https://openreview.net/forum?id=forum-hydro-1)"
 
     state_dir = tmp_path / "state"
@@ -238,9 +235,7 @@ def test_pipeline_is_idempotent_and_detects_review_update(tmp_path):
     assert len(list((briefings_dir / "conference").glob("*.md"))) == 2
 
 
-def test_union_retrieval_selects_keyword_or_embedding_without_deepseek_judge(
-    tmp_path,
-):
+def test_union_retrieval_selects_keyword_or_embedding(tmp_path):
     from conference import run_conference_source
 
     data = _fixture()
@@ -272,7 +267,6 @@ def test_union_retrieval_selects_keyword_or_embedding_without_deepseek_judge(
         "threshold": 0.5,
         "batch_size": 8,
     }
-    config["relevance"] = {"ai_judge": False, "version": 2}
     prompts = []
 
     class FakeEmbeddingClient:
@@ -285,7 +279,6 @@ def test_union_retrieval_selects_keyword_or_embedding_without_deepseek_judge(
 
     def fake_ai(prompt, model="test", max_tokens=0):
         prompts.append(prompt)
-        assert "相关度判定器" not in prompt
         return "### HydroCast\n\nEmbedding-selected paper."
 
     result = run_conference_source(
@@ -336,7 +329,6 @@ def test_pending_event_batches_drain_even_when_poll_is_not_due(tmp_path):
     config["max_events_per_briefing"] = 1
 
     def fake_ai(prompt, model="test", max_tokens=0):
-        assert "相关度判定器" not in prompt
         return "### Conference event"
 
     first = run_conference_source(
@@ -431,7 +423,7 @@ def test_sync_run_resumes_same_cursor_and_enforces_single_lease(tmp_path):
                 "forum_id": "forum-1",
                 "paper": {"forum_id": "forum-1", "title": "Hydrology"},
                 "metadata_hash": "hash-1",
-                "stage": "PENDING_JUDGE",
+                "stage": "PENDING_FORUM",
             }
         ],
         "note-1",
@@ -465,7 +457,6 @@ def test_pipeline_emits_phase_progress_logs(tmp_path):
     logs = []
 
     def fake_ai(prompt, model="test", max_tokens=0):
-        assert "相关度判定器" not in prompt
         return "### Conference event"
 
     result = run_conference_source(
@@ -481,7 +472,6 @@ def test_pipeline_emits_phase_progress_logs(tmp_path):
 
     assert result.outcome == "SUCCESS"
     assert any("[DISCOVERY]" in line for line in logs)
-    assert not any("[JUDGING] request started" in line for line in logs)
     assert any("[FORUM_POLL]" in line for line in logs)
     assert any("COMPLETE" in line for line in logs)
 
@@ -530,7 +520,6 @@ def test_pipeline_resumes_after_discovery_page_checkpoint(tmp_path):
     config["full_rescan_interval_days"] = 30
 
     def fake_ai(prompt, model="test", max_tokens=0):
-        assert "相关度判定器" not in prompt
         return "### Conference event"
 
     state_dir = tmp_path / "state"

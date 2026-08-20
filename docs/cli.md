@@ -74,7 +74,7 @@ lifecycle state or emit an already-rendered deterministic event again. If a
 conference run was interrupted, the next invocation resumes its saved page
 cursor and work queue.
 
-`dailyinfo status` shows the active OpenReview phase (`DISCOVERY`, `JUDGING`,
+`dailyinfo status` shows the active OpenReview phase (`DISCOVERY`, `RETRIEVAL`,
 `FORUM_POLL`, or `RENDERING`) and its checkpoint counters. A run interrupted by
 Ctrl-C or a stale process can be resumed with the same `dailyinfo run -p 6`
 command.

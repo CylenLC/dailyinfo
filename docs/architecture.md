@@ -118,7 +118,7 @@ DailyInfo 是面向 AI for Science 研究者的自动化情报聚合与精读系
 - **状态**：`state/openreview.sqlite3` 保存 venue 水位线、相关论文快照和确定性事件
 - **增量**：submission 水位线 + 已相关论文 forum 轮询 + 周期性全量校准
 - **可恢复处理**：显式 API 分页，每页提交 `after` cursor；`sync_runs`/`sync_items` 保存 discovery、相关度、forum 阶段和 heartbeat，Ctrl-C 或网络失败后可续跑
-- **进度**：日志输出 discovery/judging/forum/rendering 阶段、当前数量、候选数、错误数和 run ID；`dailyinfo status` 显示活跃/中断 run
+- **进度**：日志输出 discovery/retrieval/forum/rendering 阶段、当前数量、候选数、错误数和 run ID；`dailyinfo status` 显示活跃/中断 run
 - **认证**：默认 guest；可选用户名/密码认证，但 `public_only` 默认过滤非公开 note/字段
 
 ## Discord Channel Mapping
