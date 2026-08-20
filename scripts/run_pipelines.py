@@ -24,6 +24,8 @@ import time
 import requests
 
 from datasource import DataSource, RSSDataSource, build_feed_url_map
+from conference import ConferenceState, run_conference_source
+from openreview_provider import classify_openreview_error
 from paths import BRIEFINGS_DIR, FRESHRSS_DATA, PUSHED_DIR, STATE_DIR
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -512,6 +514,8 @@ def _already_pushed_within(name: str, category: str, lookback_hours: int) -> boo
 # every source is re-run; names in ``FORCE_SOURCES`` are selectively re-run.
 FORCE_ALL: bool = False
 FORCE_SOURCES: set[str] = set()
+SOURCE_FILTER: set[str] = set()
+CONFERENCE_RUN_FAILED: bool = False
 
 
 def _is_forced(name: str) -> bool:
@@ -563,6 +567,7 @@ def _filter_sources(cfg: dict, category: str, *types: str) -> list[dict]:
         if s.get("category") == category
         and s.get("type") in types
         and s.get("enabled", True)
+        and (not SOURCE_FILTER or s.get("name") in SOURCE_FILTER)
     ]
 
 
@@ -820,6 +825,8 @@ def run_pipeline_code() -> int:
     for source_cfg in cfg["sources"]:
         if source_cfg.get("category") != "code" or source_cfg.get("enabled") is False:
             continue
+        if SOURCE_FILTER and source_cfg.get("name") not in SOURCE_FILTER:
+            continue
 
         ds = DataSource.create(source_cfg, defaults)
         log(f"  {ds.name}...")
@@ -982,6 +989,7 @@ def run_pipeline_resource() -> int:
         if s.get("category") == "resource"
         and s.get("news_group") == _DLUT_NEWS_GROUP
         and s.get("enabled", True) is not False
+        and (not SOURCE_FILTER or s.get("name") in SOURCE_FILTER)
     ]
     if news_sources:
         if _has_real_briefing_today(_DLUT_NEWS_GROUP, "resource"):
@@ -998,6 +1006,7 @@ def run_pipeline_resource() -> int:
             source_cfg.get("category") != "resource"
             or source_cfg.get("enabled") is False
             or source_cfg.get("news_group") == _DLUT_NEWS_GROUP
+            or (SOURCE_FILTER and source_cfg.get("name") not in SOURCE_FILTER)
         ):
             continue
 
@@ -1057,6 +1066,76 @@ def run_pipeline_resource() -> int:
 
 
 # =====================================================================
+# PIPELINE 6: OpenReview Conference Papers
+# =====================================================================
+def run_pipeline_conference() -> int:
+    global CONFERENCE_RUN_FAILED
+
+    CONFERENCE_RUN_FAILED = False
+    log("=== Pipeline 6: Conference Papers ===")
+    cfg, defaults, _templates = _load_sources()
+    sources = _filter_sources(cfg, "conference", "api")
+    saved = 0
+    for source_cfg in sources:
+        if source_cfg.get("provider") != "openreview":
+            log(f"  {source_cfg.get('name', '?')}: unsupported conference provider")
+            CONFERENCE_RUN_FAILED = True
+            continue
+        name = source_cfg["name"]
+        log(f"  {name}...")
+        try:
+            result = run_conference_source(
+                source_cfg,
+                defaults,
+                call_ai,
+                STATE_DIR,
+                BRIEFINGS_DIR,
+                DATE,
+                force=_is_forced(name),
+                logger=log,
+            )
+            saved += result.files_saved
+            if result.outcome == "DEGRADED":
+                CONFERENCE_RUN_FAILED = True
+            log(
+                f"    {result.outcome}: scanned={result.submissions_scanned} "
+                f"candidates={result.retrieval_candidates} "
+                f"relevant={result.relevant_papers} events={result.events_created} "
+                f"saved={result.files_saved}"
+            )
+        except KeyboardInterrupt:
+            try:
+                active = ConferenceState(STATE_DIR / "openreview.sqlite3").active_run(
+                    name
+                )
+                if active:
+                    ConferenceState(STATE_DIR / "openreview.sqlite3").interrupt_run(
+                        active["run_id"], "received interrupt signal"
+                    )
+            finally:
+                raise
+        except Exception as exc:
+            CONFERENCE_RUN_FAILED = True
+            try:
+                state = ConferenceState(STATE_DIR / "openreview.sqlite3")
+                active = state.active_run(name)
+                if active:
+                    state.interrupt_run(active["run_id"], f"source error: {exc}")
+            except Exception as state_exc:
+                log(f"    STATE_ERROR: {state_exc}")
+            outcome = classify_openreview_error(exc)
+            try:
+                ConferenceState(STATE_DIR / "openreview.sqlite3").record_outcome(
+                    name, source_cfg.get("venue_id", ""), outcome, str(exc)
+                )
+            except Exception as state_exc:
+                log(f"    STATE_ERROR: {state_exc}")
+            log(f"    {outcome}: {exc}")
+    log(f"  Pipeline 6 done: {saved} files saved")
+    return saved
+
+
+# =====================================================================
 # Main
 # =====================================================================
 def main() -> int:
@@ -1064,8 +1143,8 @@ def main() -> int:
     parser.add_argument(
         "--pipeline",
         type=int,
-        choices=[1, 2, 3, 4, 5],
-        help="Run specific pipeline: 1=papers, 2=ai_news, 3=arxiv, 4=code, 5=resource. Default: all",
+        choices=[1, 2, 3, 4, 5, 6],
+        help="Run specific pipeline: 1=papers, 2=ai_news, 3=arxiv, 4=code, 5=resource, 6=conference. Default: all",
     )
     parser.add_argument(
         "--force",
@@ -1075,12 +1154,46 @@ def main() -> int:
         help="Force regenerate. Pass 'all' to refresh everything or a source "
         "name to target one source. Repeatable.",
     )
+    parser.add_argument(
+        "--source",
+        action="append",
+        default=[],
+        metavar="SOURCE",
+        help="Only run the named configured source. Repeatable.",
+    )
     args = parser.parse_args()
 
-    global API_KEY, FORCE_ALL, FORCE_SOURCES
-    API_KEY = load_api_key()
+    global API_KEY, FORCE_ALL, FORCE_SOURCES, SOURCE_FILTER
     FORCE_ALL = "all" in args.force
     FORCE_SOURCES = set(args.force) - {"all"}
+    SOURCE_FILTER = set(args.source)
+    if SOURCE_FILTER:
+        cfg, _defaults, _templates = _load_sources()
+        configured = {source.get("name"): source for source in cfg.get("sources", [])}
+        unknown = sorted(SOURCE_FILTER - configured.keys())
+        if unknown:
+            parser.error(f"unknown source(s): {', '.join(unknown)}")
+        if args.pipeline:
+            pipeline_categories = {
+                1: "papers",
+                2: "ai_news",
+                3: "arxiv",
+                4: "code",
+                5: "resource",
+                6: "conference",
+            }
+            wrong = sorted(
+                name
+                for name in SOURCE_FILTER
+                if configured[name].get("category")
+                != pipeline_categories[args.pipeline]
+            )
+            if wrong:
+                parser.error(
+                    f"source(s) do not belong to pipeline {args.pipeline}: "
+                    + ", ".join(wrong)
+                )
+    API_KEY = load_api_key()
     if FORCE_ALL or FORCE_SOURCES:
         log(
             "Force mode: "
@@ -1098,26 +1211,49 @@ def main() -> int:
         3: run_pipeline_arxiv,
         4: run_pipeline_code,
         5: run_pipeline_resource,
+        6: run_pipeline_conference,
     }
-    to_run = [args.pipeline] if args.pipeline else [1, 2, 3, 4, 5]
+    if args.pipeline:
+        to_run = [args.pipeline]
+    elif SOURCE_FILTER:
+        category_pipelines = {
+            "papers": 1,
+            "ai_news": 2,
+            "arxiv": 3,
+            "code": 4,
+            "resource": 5,
+            "conference": 6,
+        }
+        to_run = sorted(
+            {
+                category_pipelines[configured[name]["category"]]
+                for name in SOURCE_FILTER
+            }
+        )
+    else:
+        to_run = [1, 2, 3, 4, 5, 6]
     total_saved = 0
+    failed_pipelines: set[int] = set()
 
     for p in to_run:
         try:
             total_saved += pipelines[p]()
         except Exception as e:
+            failed_pipelines.add(p)
             log(f"Pipeline {p} FAILED: {e}")
             import traceback
             traceback.print_exc()
 
     log("=== Summary ===")
-    for d in ["papers", "ai_news", "code", "resource", "arxiv"]:
+    for d in ["papers", "ai_news", "code", "resource", "arxiv", "conference"]:
         path = BRIEFINGS_DIR / d
         if path.exists():
             files = [f.name for f in sorted(path.iterdir()) if DATE in f.name]
             log(f'  {d}/: {len(files)} today - {", ".join(files)}')
 
     log(f"Total: {total_saved} files saved")
+    if args.pipeline == 6:
+        return 1 if CONFERENCE_RUN_FAILED or 6 in failed_pipelines else 0
     return 0 if total_saved > 0 else 1
 
 

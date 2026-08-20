@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import time
 from datetime import datetime
 
@@ -20,6 +21,31 @@ def test_save_writes_under_briefings_dir(monkeypatch):
     assert path.exists()
     assert path.read_text(encoding="utf-8") == "hello world"
     assert full == str(path)
+
+
+def test_pipeline6_main_treats_empty_result_as_success(monkeypatch):
+    import run_pipelines as rp
+
+    monkeypatch.setattr(sys, "argv", ["run_pipelines.py", "--pipeline", "6"])
+    monkeypatch.setattr(rp, "load_api_key", lambda: "test-key")
+    monkeypatch.setattr(rp, "run_pipeline_conference", lambda: 0)
+    monkeypatch.setattr(rp, "CONFERENCE_RUN_FAILED", False)
+
+    assert rp.main() == 0
+
+
+def test_pipeline6_main_reports_uncaught_failure(monkeypatch):
+    import run_pipelines as rp
+
+    def fail():
+        raise RuntimeError("unexpected failure")
+
+    monkeypatch.setattr(sys, "argv", ["run_pipelines.py", "--pipeline", "6"])
+    monkeypatch.setattr(rp, "load_api_key", lambda: "test-key")
+    monkeypatch.setattr(rp, "run_pipeline_conference", fail)
+    monkeypatch.setattr(rp, "CONFERENCE_RUN_FAILED", False)
+
+    assert rp.main() == 1
 
 
 def test_already_pushed_within_detects_recent_file():
