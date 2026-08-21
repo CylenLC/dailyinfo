@@ -1316,7 +1316,7 @@ def _briefing_prompt(source: str, display_name: str, events: list[dict]) -> str:
 来源：{display_name}（{source}）
 
 要求：
-1. 每篇论文一个三级标题，说明新论文或状态更新。
+1. 每篇论文一个三级标题，直接使用论文题目；如有状态变化，可在标题后简要标注状态。
 2. 保留会议、作者、OpenReview、PDF、状态、检索命中方式和评审统计；paper.code_url 非空时必须输出“Link To Code”；链接必须使用输入值。
 3. 用一段话总结研究内容，再写“为什么值得关注”。DeepSeek 只负责本简报的总结，不参与论文相关度筛选。
 4. 评审评分必须优先展示 raw_review_ratings 中的 OpenReview 原始值，原样保留其数字或标签；归一化统计只能作为补充，不能冒充原始评分。

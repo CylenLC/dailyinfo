@@ -149,6 +149,18 @@ def _link_to_code(content: dict) -> str:
     return ""
 
 
+def _absolute_openreview_url(value: Any) -> str:
+    """Normalize OpenReview relative links to usable absolute URLs."""
+    url = str(value or "").strip()
+    if not url:
+        return ""
+    if url.startswith(("https://", "http://")):
+        return url
+    if url.startswith("/"):
+        return f"https://openreview.net{url}"
+    return url
+
+
 @dataclass(frozen=True)
 class VenueCapabilities:
     venue_id: str
@@ -408,7 +420,7 @@ class OpenReviewProvider:
             "venue": str(content_value(content, "venue", "") or ""),
             "venue_id": venue_id,
             "status": status,
-            "pdf": str(content_value(content, "pdf", "") or ""),
+            "pdf": _absolute_openreview_url(content_value(content, "pdf", "")),
             "code_url": _link_to_code(content),
             "cdate": int(_attr(note, "cdate", 0) or 0),
             "mdate": int(_attr(note, "tmdate", 0) or _attr(note, "mdate", 0) or 0),
