@@ -33,6 +33,22 @@ You wake up to a curated digest of everything relevant to your field — no feed
 | **Resilient** | Retries with exponential backoff, batch splitting on partial AI responses, per-source isolation |
 | **Scheduler-agnostic** | Bring your own cron, systemd timer, or agent runtime — DailyInfo owns the pipeline, not the clock |
 
+### OpenReview conference pipeline
+
+Pipeline 6 supports ICLR 2026, ICML 2026, and NeurIPS 2026 through the
+OpenReview API v2. It uses a resumable SQLite checkpoint at
+`~/.myagentdata/dailyinfo/state/openreview.sqlite3` and processes discovery,
+retrieval, public forum updates, and briefing rendering as separate phases.
+
+- New and changed submissions are detected incrementally using a timestamp watermark.
+- A periodic full rescan repairs missed pages and detects changes to reviews, rebuttals, decisions, and status fields on older papers.
+- Relevance uses the configured keyword/Embedding union; DeepSeek is used only for the final Chinese briefing.
+- Public review ratings are preserved as supplied by OpenReview. Relative scores are never inferred across venues.
+- `dailyinfo status` exposes the current run phase, cursor progress, candidates, and errors so interrupted runs can resume safely.
+
+Optional authentication can be provided with `OPENREVIEW_USERNAME` and
+`OPENREVIEW_PASSWORD`; public-only filtering remains enabled by default.
+
 ## Screenshots
 
 Put screenshots in `pictures/` with these names and they will render here.
@@ -116,6 +132,7 @@ dailyinfo push
 | `dailyinfo run -p 5` | Pipeline 5: university/resource |
 | `dailyinfo run -p 6` | Pipeline 6: OpenReview conference papers |
 | `dailyinfo run -p 6 --source openreview_iclr_2026` | Run one conference source only |
+| `dailyinfo status` | Show OpenReview checkpoint phase and progress |
 | `dailyinfo run -f all` | Force regeneration for all sources |
 | `dailyinfo push` | Push pending briefings to Discord and archive them |
 | `dailyinfo push -d 2026-04-22` | Push briefings for a specific date |

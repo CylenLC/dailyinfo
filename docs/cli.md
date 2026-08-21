@@ -69,6 +69,26 @@ to override — pass `all` to refresh everything, or repeat the flag with
 specific source names (matches `config/sources.json`).
 
 `--source` may be repeated to restrict a run to named configured sources.
+
+### OpenReview checkpoints and polling
+
+Pipeline 6 is not a resident daemon. Run it from cron, launchd, or another
+external scheduler. Each source checks its configured `poll_interval_hours`:
+ICLR/ICML are currently polled every 168 hours, while NeurIPS is polled daily.
+`full_rescan_interval_days` controls when the entire venue is scanned again to
+find updates to older papers and public reviews; it does not delete old state.
+
+For a one-off refresh:
+
+```bash
+dailyinfo run -p 6 --source openreview_iclr_2026 -f openreview_iclr_2026
+```
+
+Use `dailyinfo status` to inspect the active run. Discovery is checkpointed by
+page cursor, and a process interrupted during discovery, forum retrieval, or
+rendering can resume on the next invocation. Keep the local llama.cpp Qwen3
+Embedding server available at `http://127.0.0.1:8765` when the configured
+retrieval strategy includes Embedding.
 For Pipeline 6, `--force` bypasses the poll interval but does not clear
 lifecycle state or emit an already-rendered deterministic event again. If a
 conference run was interrupted, the next invocation resumes its saved page

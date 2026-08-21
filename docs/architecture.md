@@ -117,6 +117,9 @@ DailyInfo 是面向 AI for Science 研究者的自动化情报聚合与精读系
 - **Output**: `briefings/conference/`
 - **状态**：`state/openreview.sqlite3` 保存 venue 水位线、相关论文快照和确定性事件
 - **增量**：submission 水位线 + 已相关论文 forum 轮询 + 周期性全量校准
+- **轮询**：由外部调度器重复调用 `dailyinfo run`；`poll_interval_hours` 决定本次是否到期，`full_rescan_interval_days` 决定何时重新遍历整个 venue
+- **相关度**：关键词与 Qwen3 Embedding（llama.cpp `/v1/embeddings`）取并集；DeepSeek 只负责最终摘要
+- **事件**：新论文、decision/status 变化、评审新增/修改、rebuttal 更新分别形成可去重事件
 - **可恢复处理**：显式 API 分页，每页提交 `after` cursor；`sync_runs`/`sync_items` 保存 discovery、相关度、forum 阶段和 heartbeat，Ctrl-C 或网络失败后可续跑
 - **进度**：日志输出 discovery/retrieval/forum/rendering 阶段、当前数量、候选数、错误数和 run ID；`dailyinfo status` 显示活跃/中断 run
 - **认证**：默认 guest；可选用户名/密码认证，但 `public_only` 默认过滤非公开 note/字段
