@@ -52,6 +52,62 @@ def test_huggingface_models_parse_fields():
     assert first.extra["downloads"] == 45678
 
 
+def test_huggingface_daily_papers_parse_top_percent_and_metadata():
+    from datasource import APIDataSource
+
+    rows = [
+        {
+            "paper": {
+                "id": f"2401.0000{i}",
+                "title": f"Paper {i}",
+                "summary": f"Summary {i}",
+                "upvotes": i + 1,
+                "submittedOnDailyAt": "2026-08-21T00:00:00.000Z",
+                "githubRepo": "https://github.com/example/repo",
+            }
+        }
+        for i in range(10)
+    ]
+    ds = APIDataSource(
+        {
+            "name": "hf_daily_papers",
+            "category": "arxiv",
+            "url": "https://huggingface.co/api/daily_papers",
+            "top_percent": 30,
+        },
+        DEFAULTS,
+    )
+
+    items = ds._parse_hf_daily_papers(rows)
+    assert len(items) == 3
+    assert items[0].url == "https://arxiv.org/abs/2401.00009"
+    assert items[0].content == "Summary 9"
+    assert items[0].extra["upvotes"] == 10
+    assert "github.com/example/repo" in items[0].extra["code_url"]
+
+
+def test_huggingface_daily_papers_format_includes_heat_and_summary():
+    from datasource import APIDataSource, Item
+
+    ds = APIDataSource(
+        {"name": "hf_daily_papers", "category": "arxiv", "url": "x"},
+        DEFAULTS,
+    )
+    out = ds.format_items(
+        [
+            Item(
+                title="Hydro paper",
+                date="2026-08-21",
+                url="https://arxiv.org/abs/1",
+                content="A summary",
+                extra={"upvotes": 12},
+            )
+        ]
+    )
+    assert "⭐ 12 upvotes" in out
+    assert "A summary" in out
+
+
 def test_huggingface_parse_handles_non_list_data():
     from datasource import APIDataSource
 

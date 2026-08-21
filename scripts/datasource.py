@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 import datetime
 import html as html_lib
 import json
+import math
 import os
 import pathlib
 import re
@@ -374,7 +375,7 @@ class RSSDataSource(DataSource):
             return self._filter_seen(items)
 
         rows = self._db.execute(
-            "SELECT title, link, date FROM entry WHERE id_feed=? AND lastSeen>? ORDER BY date DESC",
+            "SELECT title, content, link, date FROM entry WHERE id_feed=? AND lastSeen>? ORDER BY date DESC",
             [fid, self._cutoff_ts],
         ).fetchall()
         entries = list(rows)
@@ -385,6 +386,10 @@ class RSSDataSource(DataSource):
                 title=row["title"] or "",
                 date=datetime.datetime.fromtimestamp(row["date"]).strftime("%Y-%m-%d"),
                 url=row["link"] or "",
+                # Keep the RSS summary available for local paper retrieval.
+                # Regular sources still format title-only; arXiv retrieval
+                # consumes this field as its abstract/summary text.
+                content=strip_html(row["content"] or "")[:12000],
             )
             for row in entries
         ]
@@ -401,6 +406,21 @@ class RSSDataSource(DataSource):
         return batches[: self.max_batches]
 
     def format_items(self, items: list[Item]) -> str:
+        if self.config.get("keyword_filter") or self.config.get("retrieval"):
+            lines = []
+            for i, item in enumerate(items):
+                line = f"{i + 1}. **{item.title}**\n   {item.url}"
+                if item.content:
+                    line += f"\n   摘要: {item.content[:4000]}"
+                retrieval = item.extra.get("retrieval", {})
+                matches = retrieval.get("keyword_matches", [])
+                score = retrieval.get("embedding_score")
+                if matches:
+                    line += f"\n   匹配关键词: {', '.join(matches)}"
+                if score is not None:
+                    line += f"\n   embedding cosine: {float(score):.4f}"
+                lines.append(line)
+            return "\n".join(lines)
         return "\n".join(f"{i+1}. {item.title}" for i, item in enumerate(items))
 
 
@@ -781,6 +801,8 @@ class APIDataSource(DataSource):
         resp.raise_for_status()
         data = resp.json()
 
+        if self.name == "hf_daily_papers":
+            return self._filter_seen(self._parse_hf_daily_papers(data))
         if self.name.startswith("huggingface_"):
             return self._filter_seen(self._parse_huggingface(data))
         if self.config.get("parser") == "crossref":
@@ -924,6 +946,76 @@ class APIDataSource(DataSource):
             )
         return items
 
+    def _parse_hf_daily_papers(self, data) -> list[Item]:
+        """Parse Hugging Face's community-ranked Daily Papers response.
+
+        The endpoint returns a list ordered by the day's community ranking;
+        each record contains a nested ``paper`` object.  We keep the complete
+        summary and source links in ``Item`` so the shared paper retriever and
+        the summarizer can consume the same metadata.
+        """
+
+        if not isinstance(data, list):
+            return []
+        rows = [row for row in data if isinstance(row, dict)]
+        # The endpoint is usually ranked already, but sorting explicitly keeps
+        # the top-percent contract correct if pagination or API ordering
+        # changes. Preserve original order for ties.
+        def row_upvotes(row: dict) -> int:
+            paper = row.get("paper") if isinstance(row.get("paper"), dict) else row
+            try:
+                return int(paper.get("upvotes") or row.get("upvotes") or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        rows.sort(key=row_upvotes, reverse=True)
+        top_percent = float(self.config.get("top_percent", 30))
+        if not 0 < top_percent <= 100:
+            raise ValueError("top_percent must be greater than 0 and at most 100")
+        count = max(1, math.ceil(len(rows) * top_percent / 100))
+        max_items = self.config.get("max_items")
+        if max_items:
+            count = min(count, int(max_items))
+
+        items: list[Item] = []
+        for row in rows[:count]:
+            paper = row.get("paper") if isinstance(row.get("paper"), dict) else row
+            paper_id = str(paper.get("id") or row.get("id") or "").strip()
+            title = str(paper.get("title") or row.get("title") or "").strip()
+            if not paper_id or not title:
+                continue
+            summary = str(paper.get("summary") or row.get("summary") or "").strip()
+            published = str(
+                paper.get("submittedOnDailyAt")
+                or row.get("submittedOnDailyAt")
+                or paper.get("publishedAt")
+                or row.get("publishedAt")
+                or NOW.strftime("%Y-%m-%d")
+            )
+            authors = paper.get("authors") or row.get("authors") or []
+            author_names = [
+                str(author.get("name", "")).strip()
+                for author in authors
+                if isinstance(author, dict) and author.get("name")
+            ]
+            items.append(
+                Item(
+                    title=title,
+                    date=published[:10],
+                    url=f"https://arxiv.org/abs/{paper_id}",
+                    content=summary,
+                    extra={
+                        "paper_id": paper_id,
+                        "upvotes": int(paper.get("upvotes") or row.get("upvotes") or 0),
+                        "authors": author_names,
+                        "project_page": paper.get("projectPage") or row.get("projectPage") or "",
+                        "code_url": paper.get("githubRepo") or row.get("githubRepo") or "",
+                        "ai_summary": paper.get("ai_summary") or row.get("ai_summary") or "",
+                    },
+                )
+            )
+        return items
+
     def _parse_dlut_api_rows(
         self, data_list: list, cursor: Optional[dict] = None
     ) -> tuple[list[Item], bool]:
@@ -1024,6 +1116,16 @@ class APIDataSource(DataSource):
         return items[:max_items] if max_items else items
 
     def format_items(self, items: list[Item]) -> str:
+        if self.name == "hf_daily_papers":
+            lines = []
+            for i, item in enumerate(items):
+                upvotes = item.extra.get("upvotes", 0)
+                lines.append(
+                    f"{i + 1}. **{item.title}** ⭐ {upvotes} upvotes\n"
+                    f"   {item.url}\n"
+                    f"   摘要: {item.content or item.extra.get('ai_summary', '')}"
+                )
+            return "\n".join(lines)
         if self.name == "huggingface_models":
             return "\n".join(
                 f'{i+1}. **{item.extra.get("name","")}**'

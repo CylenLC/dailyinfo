@@ -387,6 +387,121 @@ def test_process_regular_source_resets_zero_state_when_rss_recovers(
     assert not (STATE_DIR / "arxiv_cs_ai_zero_state.json").exists()
 
 
+def test_arxiv_pipeline_deduplicates_hf_and_rss_before_summarizing(
+    tmp_path, monkeypatch
+):
+    import json
+    import run_pipelines as rp
+    from datasource import Item
+
+    config_path = tmp_path / "sources.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "defaults": {"model": "stub", "prompt_template": "one_line_summary"},
+                "prompt_templates": {"one_line_summary": "{article_list}"},
+                "sources": [
+                    {
+                        "name": "arxiv_cs_ai",
+                        "display_name": "arXiv",
+                        "category": "arxiv",
+                        "type": "rss",
+                        "enabled": True,
+                    },
+                    {
+                        "name": "hf_daily_papers",
+                        "display_name": "HF Daily",
+                        "category": "arxiv",
+                        "type": "api",
+                        "enabled": True,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(rp, "SOURCES_JSON", str(config_path))
+    monkeypatch.setattr(rp, "build_feed_url_map", lambda _db: ({}, {}))
+
+    class FakeDB:
+        row_factory = None
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(rp.sqlite3, "connect", lambda _path: FakeDB())
+
+    class FakeSource:
+        def __init__(self, config):
+            self.config = config
+            self.name = config["name"]
+            self.display_name = config["display_name"]
+            self.category = "arxiv"
+            self.lookback_hours = 24
+            self._items = {
+                "hf_daily_papers": [
+                    Item(
+                        "Popular paper",
+                        rp.DATE,
+                        "https://arxiv.org/abs/2401.12345",
+                    )
+                ],
+                "arxiv_cs_ai": [
+                    Item(
+                        "RSS duplicate",
+                        rp.DATE,
+                        "https://arxiv.org/abs/2401.12345v1",
+                    ),
+                    Item("RSS unique", rp.DATE, "https://arxiv.org/abs/2401.99999"),
+                ],
+            }[self.name]
+            self.committed = []
+
+        def fetch(self):
+            return list(self._items)
+
+        def commit_seen(self, items):
+            self.committed.extend(items)
+
+        def commit_cursor(self):
+            return None
+
+        def get_batches(self, items):
+            return [items]
+
+        def format_items(self, items):
+            return "\n".join(f"{i + 1}. {item.title}" for i, item in enumerate(items))
+
+    sources = {}
+
+    def fake_create(config, defaults, **ctx):
+        source = FakeSource(config)
+        sources[source.name] = source
+        return source
+
+    monkeypatch.setattr(rp.DataSource, "create", staticmethod(fake_create))
+    monkeypatch.setattr(
+        rp,
+        "call_ai",
+        lambda prompt, **kwargs: "\n".join(
+            f"{i + 1}. **{title}**\n   > 摘要。"
+            for i, title in enumerate(
+                line.split(". ", 1)[1]
+                for line in prompt.splitlines()
+                if line.startswith(tuple(f"{i}. " for i in range(1, 10)))
+            )
+        ),
+    )
+
+    assert rp.run_pipeline_arxiv() == 2
+    hf_file = next((rp.BRIEFINGS_DIR / "arxiv").glob("hf_daily_papers_*.md"))
+    rss_file = next((rp.BRIEFINGS_DIR / "arxiv").glob("arxiv_cs_ai_*.md"))
+    assert "Popular paper" in hf_file.read_text(encoding="utf-8")
+    assert "RSS unique" in rss_file.read_text(encoding="utf-8")
+    assert "RSS duplicate" not in rss_file.read_text(encoding="utf-8")
+    assert len(sources["arxiv_cs_ai"].committed) == 2
+
+
 class _StubAIResponse:
     """Tiny stand-in for OpenRouter JSON responses used by call_ai tests."""
 

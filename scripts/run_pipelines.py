@@ -27,6 +27,7 @@ from datasource import DataSource, RSSDataSource, build_feed_url_map
 from conference import ConferenceState, run_conference_source
 from openreview_provider import classify_openreview_error
 from paths import BRIEFINGS_DIR, FRESHRSS_DATA, PUSHED_DIR, STATE_DIR
+from paper_retrieval import PaperRetriever, deduplicate_papers
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_DIR = os.path.join(PROJECT_ROOT, "config")
@@ -576,35 +577,83 @@ def _filter_sources(cfg: dict, category: str, *types: str) -> list[dict]:
     ]
 
 
+def _apply_paper_retrieval(ds, feed_cfg: dict, items: list) -> tuple[list, list]:
+    """Filter paper items and return ``(selected, all_items_to_commit)``.
+
+    Filtering is opt-in so every existing RSS/API source keeps its historical
+    behaviour. The complete fetched set is committed after a successful source
+    run, including items rejected by retrieval, preventing them from being
+    rescanned forever.
+    """
+
+    if "keyword_filter" not in feed_cfg and "retrieval" not in feed_cfg:
+        return items, items
+    retriever = PaperRetriever(
+        feed_cfg,
+        logger=lambda message: log(f"[{ds.display_name}]{message}"),
+    )
+    result = retriever.filter(items)
+    log(
+        f"  {ds.name}: retrieval selected={len(result.selected)}/{len(items)} "
+        f"keyword={result.keyword_count} embedding={result.embedding_count}"
+    )
+    return result.selected, items
+
+
 def _process_regular_source(ds, feed_cfg: dict, model_default: str,
-                            templates: dict, default_tmpl_key: str) -> int:
+                            templates: dict, default_tmpl_key: str,
+                            *, fetched_items: list | None = None,
+                            commit_items: list | None = None,
+                            items_are_filtered: bool = False) -> int:
     """Process a single source: fetch -> batch -> AI -> merge -> save -> commit.
 
     Returns number of files saved (0 or 1).
     """
     name, category = ds.name, ds.category
 
-    try:
-        items = ds.fetch()
-    except Exception as e:
-        log(f"    FETCH ERR: {e}")
-        placeholder = f"# {ds.display_name} - {DATE}\n\n" + "⚠️ 获取失败\n"
-        save(category, f"{name}_briefing_{DATE}.md", placeholder)
-        return 1
+    if fetched_items is None:
+        try:
+            raw_items = ds.fetch()
+        except Exception as e:
+            log(f"    FETCH ERR: {e}")
+            placeholder = f"# {ds.display_name} - {DATE}\n\n" + "⚠️ 获取失败\n"
+            save(category, f"{name}_briefing_{DATE}.md", placeholder)
+            return 1
+    else:
+        raw_items = fetched_items
+
+    if items_are_filtered:
+        items, default_commit_items = raw_items, raw_items
+    else:
+        try:
+            items, default_commit_items = _apply_paper_retrieval(
+                ds, feed_cfg, raw_items
+            )
+        except Exception as e:
+            log(f"    RETRIEVAL ERR: {e}")
+            return 0
+    commit_pool = commit_items if commit_items is not None else default_commit_items
 
     if not items:
-        log(f"  {name}: 0 new articles - placeholder")
-        ds.commit_seen(items)
+        log(f"  {name}: 0 relevant new articles - placeholder")
+        ds.commit_seen(commit_pool)
+        ds.commit_cursor()
         placeholder = f"# {ds.display_name} - {DATE}\n\n" + "\U0001f4ed 过去 {ds.lookback_hours} 小时无新内容\n"
         save(category, f"{name}_briefing_{DATE}.md", placeholder)
         if isinstance(ds, RSSDataSource):
             from freshrss_cache import record_zero_result
-            zero_days = record_zero_result(STATE_DIR, name, DATE)
-            if zero_days >= 2:
-                log(
-                    f"  [WARN] {name}: {zero_days} consecutive days with 0 articles — "
-                    f"FreshRSS cache may be stuck. Run: dailyinfo cache-clear"
-                )
+            from freshrss_cache import reset_zero_result
+            if raw_items:
+                # The feed returned entries, but retrieval rejected all of
+                # them; this is not evidence that FreshRSS is stuck.
+                reset_zero_result(STATE_DIR, name)
+            else:
+                zero_days = record_zero_result(STATE_DIR, name, DATE)
+                if zero_days >= 2:
+                    log(
+                        f"  [WARN] {name}: {zero_days} consecutive days with 0 articles — "
+                        f"FreshRSS cache may be stuck. Run: dailyinfo cache-clear"
+                    )
         return 1
 
     if isinstance(ds, RSSDataSource):
@@ -653,7 +702,9 @@ def _process_regular_source(ds, feed_cfg: dict, model_default: str,
         except Exception as e:
             log(f"    SAVE ERR: {e}")
 
-    ds.commit_seen(all_items)
+    # Mark rejected retrieval items as processed as well as summarized items.
+    ds.commit_seen(commit_pool)
+    ds.commit_cursor()
     return 1 if merged_content else 0
 
 
@@ -812,7 +863,76 @@ def run_pipeline_ai_news() -> int:
 # =====================================================================
 def run_pipeline_arxiv() -> int:
     log("=== Pipeline 3: arXiv ===")
-    saved = _run_category_pipeline("arxiv", create_marker=True)
+    # arXiv RSS and HF Daily Papers share the same Discord channel. Fetch both
+    # channels first, apply their independent retrieval rules, then remove
+    # cross-source duplicates before invoking the summarizer.
+    cfg, defaults, templates = _load_sources()
+    model_default = defaults.get("model", "deepseek-v4-pro")
+    default_tmpl_key = defaults.get("prompt_template", "one_line_summary")
+    saved = 0
+    db = None
+    try:
+        try:
+            db = sqlite3.connect(FRESHRSS_DB)
+            db.row_factory = sqlite3.Row
+            full_map, base_map = build_feed_url_map(db)
+        except Exception as exc:
+            log(f"  [arxiv] FreshRSS unavailable; RSS sources will be skipped: {exc}")
+            full_map, base_map = {}, {}
+
+        _create_arxiv_marker()
+        seen_identities: set[str] = set()
+        records: list[tuple[object, dict, list, list]] = []
+        source_cfgs = _filter_sources(cfg, "arxiv", "rss", "api", "scrape")
+        # Community-ranked HF items win when the same paper is also present in
+        # the RSS feed; the arXiv channel still retains all unique RSS hits.
+        source_cfgs.sort(key=lambda source: 0 if source.get("name") == "hf_daily_papers" else 1)
+
+        for source_cfg in source_cfgs:
+            name = source_cfg.get("name", "")
+            category = source_cfg.get("category", "arxiv")
+            if _has_real_briefing_today(name, category):
+                log(f"  {name}: briefing already exists for {DATE}, skip")
+                continue
+            ds = DataSource.create(
+                source_cfg,
+                defaults,
+                db=db,
+                full_map=full_map,
+                base_map=base_map,
+            )
+            log(f"  {name}...")
+            try:
+                raw_items = ds.fetch()
+                selected, commit_pool = _apply_paper_retrieval(
+                    ds, source_cfg, raw_items
+                )
+                unique_selected = deduplicate_papers(selected, seen_identities)
+                duplicate_count = len(selected) - len(unique_selected)
+                if duplicate_count:
+                    log(f"  {name}: removed {duplicate_count} cross-source duplicates")
+                records.append((ds, source_cfg, unique_selected, commit_pool))
+            except Exception as exc:
+                log(f"    FETCH/RETRIEVAL ERR: {exc}")
+                placeholder = f"# {ds.display_name} - {DATE}\n\n⚠️ 获取或筛选失败\n"
+                save(category, f"{name}_briefing_{DATE}.md", placeholder)
+                saved += 1
+
+        for ds, source_cfg, items, commit_pool in records:
+            saved += _process_regular_source(
+                ds,
+                source_cfg,
+                model_default,
+                templates,
+                default_tmpl_key,
+                fetched_items=items,
+                commit_items=commit_pool,
+                items_are_filtered=True,
+            )
+    finally:
+        if db is not None:
+            db.close()
+        _remove_arxiv_marker()
     log(f"  Pipeline 3 done: {saved} files saved")
     return saved
 
