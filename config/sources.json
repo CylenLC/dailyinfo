@@ -1,7 +1,7 @@
 {
   "version": 2,
   "defaults": {
-    "model": "deepseek-v4-pro",
+    "model": "deepseek-v4-flash",
     "lookback_hours": 24,
     "max_articles_per_batch": 10,
     "freshrss_user": ""
@@ -652,6 +652,125 @@
       "max_articles_per_batch": 20,
       "prompt_template": "recruitment",
       "type": "api"
+    },
+    {
+      "name": "openreview_iclr_2026",
+      "display_name": "ICLR 2026",
+      "category": "conference",
+      "type": "api",
+      "provider": "openreview",
+      "venue_id": "ICLR.cc/2026/Conference",
+      "enabled": true,
+      "public_only": true,
+      "poll_interval_hours": 168,
+      "full_rescan_interval_days": 30,
+      "max_events_per_briefing": 10,
+      "filters": {
+        "version": 2,
+        "exclude_phrases": [
+          "watermark",
+          "watermarking"
+        ]
+      },
+      "retrieval": {
+        "strategy": "lexical_embedding_union",
+        "version": 3,
+        "endpoint": "http://127.0.0.1:8765",
+        "model": "Qwen/Qwen3-Embedding-0.6B",
+        "query_instruction": "Retrieve conference papers relevant to AI for hydrology and water resources.",
+        "query_text": "AI for hydrology and water resources research, including rainfall-runoff and streamflow forecasting, flood prediction, watershed and river modelling, precipitation, hydroclimate, remote sensing of water, physics-informed machine learning, and foundation models for Earth-system prediction.",
+        "text_mode": "title_abstract",
+        "dimension": 512,
+        "threshold": 0.45,
+        "batch_size": 2,
+        "max_length": 1024
+      },
+      "reviews": {
+        "enabled": true,
+        "min_reviews_for_signal": 2,
+        "rating_options": [
+          "0: strong reject",
+          "2: reject",
+          "4: marginally below the acceptance threshold",
+          "6: marginally above the acceptance threshold",
+          "8: accept",
+          "10: strong accept"
+        ]
+      }
+    },
+    {
+      "name": "openreview_icml_2026",
+      "display_name": "ICML 2026",
+      "category": "conference",
+      "type": "api",
+      "provider": "openreview",
+      "venue_id": "ICML.cc/2026/Conference",
+      "enabled": true,
+      "public_only": true,
+      "poll_interval_hours": 168,
+      "full_rescan_interval_days": 30,
+      "max_events_per_briefing": 10,
+      "filters": {
+        "version": 2,
+        "exclude_phrases": [
+          "watermark",
+          "watermarking"
+        ]
+      },
+      "retrieval": {
+        "strategy": "lexical_embedding_union",
+        "version": 3,
+        "endpoint": "http://127.0.0.1:8765",
+        "model": "Qwen/Qwen3-Embedding-0.6B",
+        "query_instruction": "Retrieve conference papers relevant to AI for hydrology and water resources.",
+        "query_text": "AI for hydrology and water resources research, including rainfall-runoff and streamflow forecasting, flood prediction, watershed and river modelling, precipitation, hydroclimate, remote sensing of water, physics-informed machine learning, and foundation models for Earth-system prediction.",
+        "text_mode": "title_abstract",
+        "dimension": 512,
+        "threshold": 0.45,
+        "batch_size": 2,
+        "max_length": 1024
+      },
+      "reviews": {
+        "enabled": true,
+        "min_reviews_for_signal": 2
+      }
+    },
+    {
+      "name": "openreview_neurips_2026",
+      "display_name": "NeurIPS 2026",
+      "category": "conference",
+      "type": "api",
+      "provider": "openreview",
+      "venue_id": "NeurIPS.cc/2026/Conference",
+      "enabled": true,
+      "public_only": true,
+      "poll_interval_hours": 24,
+      "full_rescan_interval_days": 7,
+      "max_events_per_briefing": 10,
+      "filters": {
+        "version": 2,
+        "exclude_phrases": [
+          "watermark",
+          "watermarking"
+        ]
+      },
+      "retrieval": {
+        "strategy": "lexical_embedding_union",
+        "version": 3,
+        "endpoint": "http://127.0.0.1:8765",
+        "model": "Qwen/Qwen3-Embedding-0.6B",
+        "query_instruction": "Retrieve conference papers relevant to AI for hydrology and water resources.",
+        "query_text": "AI for hydrology and water resources research, including rainfall-runoff and streamflow forecasting, flood prediction, watershed and river modelling, precipitation, hydroclimate, remote sensing of water, physics-informed machine learning, and foundation models for Earth-system prediction.",
+        "text_mode": "title_abstract",
+        "dimension": 512,
+        "threshold": 0.45,
+        "batch_size": 2,
+        "max_length": 1024
+      },
+      "reviews": {
+        "enabled": true,
+        "min_reviews_for_signal": 2
+      }
     }
   ],
   "discord_channels": {
