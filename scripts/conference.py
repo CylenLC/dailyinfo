@@ -1274,10 +1274,17 @@ def _briefing_prompt(source: str, display_name: str, events: list[dict]) -> str:
     payload = []
     for event in events:
         after = event["after_json"]
+        paper = dict(after["paper"])
+        # Events persisted before PDF URL normalization may still contain a
+        # relative `/pdf/...` path. Normalize at render time as well so resume
+        # and retry paths produce the same absolute link as fresh discovery.
+        pdf = str(paper.get("pdf") or "").strip()
+        if pdf.startswith("/"):
+            paper["pdf"] = f"https://openreview.net{pdf}"
         payload.append(
             {
                 "event_types": event["event_types_json"],
-                "paper": after["paper"],
+                "paper": paper,
                 "status": after["status"],
                 "decision": after["decision"],
                 "decision_text": after.get("decision_text", ""),
