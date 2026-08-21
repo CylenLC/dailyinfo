@@ -53,7 +53,9 @@ dailyinfo restart    # Restart FreshRSS
 dailyinfo run                      # Run all 6 pipelines
 dailyinfo run -p 1                 # Pipeline 1 (papers)
 dailyinfo run -p 2                 # Pipeline 2 (AI news)
-dailyinfo run -p 3                 # Pipeline 3 (arXiv CS.AI)
+dailyinfo run -p 3                 # Pipeline 3 (arXiv + HF Daily Papers)
+dailyinfo run -p 3 --source arxiv_cs_ai --source hf_daily_papers \
+  -f arxiv_cs_ai -f hf_daily_papers
 dailyinfo run -p 4                 # Pipeline 4 (code trending)
 dailyinfo run -p 5                 # Pipeline 5 (university news)
 dailyinfo run -p 6                 # Pipeline 6 (OpenReview conference events)
@@ -69,6 +71,13 @@ to override — pass `all` to refresh everything, or repeat the flag with
 specific source names (matches `config/sources.json`).
 
 `--source` may be repeated to restrict a run to named configured sources.
+
+Pipeline 3 requires the arXiv RSS feed to be subscribed in FreshRSS. Its
+`arxiv_cs_ai` source combines keyword matching with the local Qwen3 Embedding
+llama.cpp server (`http://127.0.0.1:8765/v1/embeddings`). The
+`hf_daily_papers` source ranks the Hugging Face Daily Papers response by
+upvotes and keeps the configured top 10 items. The two sources are deduplicated
+by arXiv ID or normalized title before DeepSeek summarization.
 For Pipeline 6, `--force` bypasses the poll interval but does not clear
 lifecycle state or emit an already-rendered deterministic event again. If a
 conference run was interrupted, the next invocation resumes its saved page

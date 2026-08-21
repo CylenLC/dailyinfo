@@ -26,12 +26,36 @@ You wake up to a curated digest of everything relevant to your field — no feed
 
 | | |
 |---|---|
-| **Six pipelines** | Journal papers · AI news · arXiv CS.AI · GitHub + HuggingFace trends · University updates · OpenReview conference papers and public review events |
+| **Six pipelines** | Journal papers · AI news · arXiv/HuggingFace Daily Papers · GitHub + HuggingFace trends · University updates · OpenReview conference papers and public review events |
 | **Chinese-first briefings** | AI summaries in Chinese with automatic fallback to an OpenRouter model when the primary API fails |
 | **Configuration-driven** | Add RSS, scrape, or API sources in `config/sources.json` — no code changes required |
 | **Idempotent & safe to rerun** | Sources with today's briefing are skipped; pushed files are never re-sent |
 | **Resilient** | Retries with exponential backoff, batch splitting on partial AI responses, per-source isolation |
 | **Scheduler-agnostic** | Bring your own cron, systemd timer, or agent runtime — DailyInfo owns the pipeline, not the clock |
+
+### arXiv + HuggingFace Daily Papers retrieval
+
+Pipeline 3 runs two independent paper channels:
+
+- `arxiv_cs_ai` reads the arXiv RSS feed from FreshRSS, then applies configurable keyword matching plus Qwen3 Embedding cosine similarity. A paper is retained when either channel matches.
+- `hf_daily_papers` reads the Hugging Face Daily Papers API, ranks the returned papers by community upvotes, and keeps the configured top N items (10 by default).
+- Both channels are deduplicated by arXiv ID (including version normalization) or normalized title before summaries are generated. DeepSeek only summarizes retained papers; it does not decide relevance.
+
+The arXiv RSS URL must first be subscribed to in FreshRSS:
+
+```text
+https://rss.arxiv.org/rss/cs.AI
+```
+
+The local llama.cpp embedding server is expected at `http://127.0.0.1:8765`. Start it before running Pipeline 3, then run:
+
+```bash
+dailyinfo run -p 3 \
+  --source arxiv_cs_ai \
+  --source hf_daily_papers \
+  -f arxiv_cs_ai \
+  -f hf_daily_papers
+```
 
 ## Screenshots
 
@@ -111,7 +135,7 @@ dailyinfo push
 | `dailyinfo run` | Run all briefing pipelines |
 | `dailyinfo run -p 1` | Pipeline 1: journal papers |
 | `dailyinfo run -p 2` | Pipeline 2: AI news |
-| `dailyinfo run -p 3` | Pipeline 3: arXiv CS.AI |
+| `dailyinfo run -p 3` | Pipeline 3: arXiv + HuggingFace Daily Papers |
 | `dailyinfo run -p 4` | Pipeline 4: code trending |
 | `dailyinfo run -p 5` | Pipeline 5: university/resource |
 | `dailyinfo run -p 6` | Pipeline 6: OpenReview conference papers |

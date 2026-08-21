@@ -36,7 +36,7 @@ DailyInfo 是面向 AI for Science 研究者的自动化情报聚合与精读系
 │  │  scripts/run_pipelines.py                                    │   │
 │  │  • Pipeline 1: Papers → AI summary → briefings/papers        │   │
 │  │  • Pipeline 2: AI News → AI summary → briefings/ai_news      │   │
-│  │  • Pipeline 3: arXiv CS.AI → AI summary → briefings/arxiv    │   │
+│  │  • Pipeline 3: arXiv + HF Daily Papers → retrieval → briefings/arxiv │ │
 │  │  • Pipeline 4: Code trending → AI summary → briefings/code   │   │
 │  │  • Pipeline 5: University news → AI summary → briefings/res. │   │
 │  │  • Pipeline 6: OpenReview events → briefings/conference      │   │
@@ -99,10 +99,13 @@ DailyInfo 是面向 AI for Science 研究者的自动化情报聚合与精读系
 - **Input**: FreshRSS SQLite DB (smolai via deep-content processing)
 - **Output**: `briefings/ai_news/`
 
-### Pipeline 3: arXiv CS.AI
-- **Input**: FreshRSS SQLite DB (arXiv RSS, up to 500 articles)
+### Pipeline 3: arXiv + HuggingFace Daily Papers
+- **Input**: FreshRSS SQLite DB for `arxiv_cs_ai` plus the Hugging Face Daily Papers API
+- **Retrieval**: arXiv uses configurable keyword matching and Qwen3 Embedding cosine similarity (union); HF items are ranked by upvotes and limited to the configured top N
+- **Deduplication**: arXiv ID (with version suffix normalization) or normalized title, before DeepSeek summarization
 - **Output**: `briefings/arxiv/`
 - **特殊处理**：运行时创建 `.arxiv_generating` marker 文件，`push` 在推送前轮询等待（最长 30 分钟）
+- **Embedding backend**: llama.cpp OpenAI-compatible `/v1/embeddings` endpoint at `127.0.0.1:8765`
 
 ### Pipeline 4: Code Trending
 - **Input**: GitHub Trending HTML + HuggingFace API
