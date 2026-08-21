@@ -387,6 +387,25 @@ def test_sync_outcome_does_not_advance_clocks_on_failure(tmp_path):
     assert after_failure["submission_watermark_ms"] == 123456
 
 
+def test_state_retries_transient_database_open_error(tmp_path, monkeypatch):
+    import conference
+
+    real_connect = conference.sqlite3.connect
+    attempts = {"count": 0}
+
+    def flaky_connect(*args, **kwargs):
+        if attempts["count"] < 2:
+            attempts["count"] += 1
+            raise conference.sqlite3.OperationalError("unable to open database file")
+        return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr(conference.sqlite3, "connect", flaky_connect)
+    state = conference.ConferenceState(tmp_path / "state.sqlite")
+
+    assert state.path.exists()
+    assert attempts["count"] == 2
+
+
 def test_sync_run_resumes_same_cursor_and_enforces_single_lease(tmp_path):
     from conference import RUN_ACTIVE, RUN_INTERRUPTED, ConferenceState
 

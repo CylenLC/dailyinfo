@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import sqlite3
 import statistics
+import time
 import unicodedata
 from typing import Any, Callable
 import uuid
@@ -31,6 +32,8 @@ RUN_COMPLETE = "COMPLETE"
 RUN_FAILED = "FAILED"
 RUN_OBSOLETE = "OBSOLETE"
 RUN_STALE_AFTER_MS = 5 * 60 * 1000
+DB_CONNECT_ATTEMPTS = 5
+DB_RETRY_DELAYS = (0.25, 0.5, 1.0, 2.0)
 DEFAULT_STRONG_DOMAIN = (
     "hydrology",
     "hydrological",
@@ -543,9 +546,29 @@ class ConferenceState:
         self._init_schema()
 
     def _connect(self):
-        conn = sqlite3.connect(self.path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        last_error: sqlite3.OperationalError | None = None
+        for attempt in range(DB_CONNECT_ATTEMPTS):
+            try:
+                conn = sqlite3.connect(self.path, timeout=30.0)
+                conn.row_factory = sqlite3.Row
+                conn.execute("PRAGMA busy_timeout=30000")
+                return conn
+            except sqlite3.OperationalError as exc:
+                last_error = exc
+                message = str(exc).casefold()
+                retryable = any(
+                    phrase in message
+                    for phrase in (
+                        "unable to open database file",
+                        "database is locked",
+                        "database table is locked",
+                    )
+                )
+                if not retryable or attempt == DB_CONNECT_ATTEMPTS - 1:
+                    raise
+                time.sleep(DB_RETRY_DELAYS[attempt])
+        assert last_error is not None
+        raise last_error
 
     def _init_schema(self) -> None:
         with self._connect() as conn:
@@ -631,6 +654,8 @@ class ConferenceState:
                     ON sync_items(run_id, stage, updated_ms);
                 """
             )
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
             current = conn.execute(
                 "SELECT value FROM meta WHERE key='schema_version'"
             ).fetchone()
