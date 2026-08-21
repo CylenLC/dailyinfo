@@ -17,7 +17,11 @@ import unicodedata
 from typing import Any, Callable
 import uuid
 
-from embedding_retrieval import EmbeddingRetrievalConfig, QwenEmbeddingClient
+from embedding_retrieval import (
+    EmbeddingRetrievalConfig,
+    LlamaCppEmbeddingClient,
+    QwenEmbeddingClient,
+)
 from openreview_provider import (
     OpenReviewProvider,
     SubmissionPage,
@@ -1442,7 +1446,7 @@ def run_conference_source(
     force: bool = False,
     provider: OpenReviewProvider | None = None,
     candidate_retriever: CandidateRetriever = lexical_recall,
-    embedding_client: QwenEmbeddingClient | None = None,
+    embedding_client: Any | None = None,
     logger: Callable[[str], None] | None = None,
 ) -> ConferenceRunResult:
     def emit(message: str) -> None:
@@ -1480,7 +1484,15 @@ def run_conference_source(
         EmbeddingRetrievalConfig.from_source(config) if use_embeddings else None
     )
     if use_embeddings and embedding_client is None:
-        embedding_client = QwenEmbeddingClient(embedding_config)
+        assert embedding_config is not None
+        if embedding_config.backend == "llama_cpp":
+            embedding_client = LlamaCppEmbeddingClient(embedding_config)
+        elif embedding_config.backend in {"qwen_fastapi", "transformers"}:
+            embedding_client = QwenEmbeddingClient(embedding_config)
+        else:
+            raise ValueError(
+                f"unsupported embedding backend: {embedding_config.backend}"
+            )
     if (
         not active
         and not force
@@ -1581,7 +1593,8 @@ def run_conference_source(
                     f"[{display_name}][EMBEDDING] scoring {len(pending_papers)} "
                     f"papers dimension={embedding_config.dimension} "
                     f"threshold={embedding_config.threshold:.3f} "
-                    f"text_mode={embedding_config.text_mode}"
+                    f"text_mode={embedding_config.text_mode} "
+                    f"backend={embedding_config.backend}"
                 )
                 scores = embedding_client.score_papers(pending_papers)
                 if len(scores) != len(embedding_pending):

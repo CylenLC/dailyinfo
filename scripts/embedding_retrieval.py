@@ -1,4 +1,9 @@
-"""Qwen3 embedding retrieval client and paper formatting helpers."""
+"""Embedding retrieval clients and paper formatting helpers.
+
+The OpenReview pipeline uses :class:`LlamaCppEmbeddingClient` by default.
+``QwenEmbeddingClient`` remains available as a migration-time adapter for the
+previous Transformers/FastAPI process and benchmark scripts.
+"""
 
 from __future__ import annotations
 
@@ -69,6 +74,7 @@ def cosine_similarity(
 
 @dataclass(frozen=True)
 class EmbeddingRetrievalConfig:
+    backend: str = "llama_cpp"
     endpoint: str = DEFAULT_ENDPOINT
     model: str = "Qwen/Qwen3-Embedding-0.6B"
     query_text: str = DEFAULT_QUERY_TEXT
@@ -90,6 +96,7 @@ class EmbeddingRetrievalConfig:
         if not -1.0 <= threshold <= 1.0:
             raise ValueError("retrieval.threshold must be between -1 and 1")
         return cls(
+            backend=str(cfg.get("backend", "llama_cpp")),
             endpoint=str(cfg.get("endpoint", DEFAULT_ENDPOINT)).rstrip("/"),
             model=str(cfg.get("model", "Qwen/Qwen3-Embedding-0.6B")),
             query_text=str(cfg.get("query_text", DEFAULT_QUERY_TEXT)),
@@ -201,3 +208,90 @@ class QwenEmbeddingClient:
         documents = [paper_text(paper, self.config.text_mode) for paper in papers]
         embeddings = self.embed_documents(documents)
         return [cosine_similarity(query, vector) for vector in embeddings]
+
+
+def _query_input(instruction: str, query: str) -> str:
+    """Format a Qwen3 query instruction for backends without input_type."""
+
+    return f"Instruct: {instruction.strip()}\nQuery: {query.strip()}"
+
+
+class LlamaCppEmbeddingClient:
+    """OpenAI-compatible embedding adapter for a llama.cpp server."""
+
+    def __init__(self, config: EmbeddingRetrievalConfig, session: Any = None):
+        self.config = config
+        self.session = session or requests.Session()
+        self._query_embedding: list[float] | None = None
+
+    def _request(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        try:
+            response = self.session.post(
+                f"{self.config.endpoint}/v1/embeddings",
+                json={"model": self.config.model, "input": texts},
+                timeout=self.config.timeout_seconds,
+            )
+            try:
+                response.raise_for_status()
+                data = response.json()
+            finally:
+                close = getattr(response, "close", None)
+                if callable(close):
+                    close()
+        except (requests.RequestException, ValueError, TypeError) as exc:
+            raise EmbeddingServiceError(
+                f"llama.cpp embedding request failed: {exc}"
+            ) from exc
+
+        records = data.get("data") if isinstance(data, dict) else None
+        if not isinstance(records, list):
+            raise EmbeddingServiceError(
+                "llama.cpp embedding response missing data list"
+            )
+        try:
+            ordered = sorted(records, key=lambda item: int(item.get("index", 0)))
+            vectors = [item.get("embedding") for item in ordered]
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise EmbeddingServiceError(
+                "llama.cpp embedding response has invalid data records"
+            ) from exc
+        if len(vectors) != len(texts) or any(
+            not isinstance(vector, list) for vector in vectors
+        ):
+            raise EmbeddingServiceError(
+                f"llama.cpp returned {len(vectors)} vectors for {len(texts)} texts"
+            )
+        try:
+            return [[float(value) for value in vector] for vector in vectors]
+        except (TypeError, ValueError) as exc:
+            raise EmbeddingServiceError(
+                "llama.cpp embedding response contains non-numeric values"
+            ) from exc
+
+    def embed_query(self, query_text: str, instruction: str) -> list[float]:
+        return self._request([_query_input(instruction, query_text)])[0]
+
+    def query_embedding(self) -> list[float]:
+        if self._query_embedding is None:
+            self._query_embedding = self.embed_query(
+                self.config.query_text, self.config.query_instruction
+            )
+        return self._query_embedding
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        vectors: list[list[float]] = []
+        batch_size = max(1, self.config.batch_size)
+        for start in range(0, len(texts), batch_size):
+            vectors.extend(self._request(texts[start : start + batch_size]))
+        return vectors
+
+    def score_papers(self, papers: list[dict]) -> list[float]:
+        query = self.query_embedding()
+        documents = [paper_text(paper, self.config.text_mode) for paper in papers]
+        embeddings = self.embed_documents(documents)
+        return [
+            cosine_similarity(query, vector, dimension=self.config.dimension)
+            for vector in embeddings
+        ]

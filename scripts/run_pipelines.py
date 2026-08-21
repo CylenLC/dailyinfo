@@ -161,7 +161,7 @@ def _resolve_fallback_model(explicit: str | None) -> str:
 
 def _post_ai(url: str, api_key: str, model: str, prompt: str, max_tokens: int):
     """Issue a single AI chat completion call and return the parsed JSON."""
-    with requests.post(
+    resp = requests.post(
         url,
         headers={
             "Authorization": f"Bearer {api_key}",
@@ -173,9 +173,14 @@ def _post_ai(url: str, api_key: str, model: str, prompt: str, max_tokens: int):
             "max_tokens": max_tokens,
         },
         timeout=120,
-    ) as resp:
+    )
+    try:
         resp.raise_for_status()
         return resp.json()
+    finally:
+        close = getattr(resp, "close", None)
+        if callable(close):
+            close()
 
 
 def _get_deepseek_key() -> str:

@@ -79,6 +79,49 @@ def test_qwen_client_formats_query_instruction_and_documents():
     assert calls[1][1]["instruction"] == ""
 
 
+def test_llama_cpp_client_uses_openai_embeddings_and_formats_query():
+    from embedding_retrieval import EmbeddingRetrievalConfig, LlamaCppEmbeddingClient
+
+    calls = []
+
+    class Response:
+        def __init__(self, count):
+            self.count = count
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "data": [
+                    {"index": index, "embedding": [1.0, 0.0, 0.0, 0.0]}
+                    for index in range(self.count)
+                ]
+            }
+
+    class Session:
+        def post(self, url, json, timeout):
+            calls.append((url, json, timeout))
+            return Response(len(json["input"]))
+
+    config = EmbeddingRetrievalConfig(
+        backend="llama_cpp",
+        model="Qwen3-Embedding-0.6B-GGUF-Q8_0",
+        dimension=4,
+        batch_size=2,
+    )
+    client = LlamaCppEmbeddingClient(config, session=Session())
+    client.embed_query("hydrology", "retrieve hydrology papers")
+    client.embed_documents(["a", "b", "c"])
+
+    assert calls[0][0].endswith("/v1/embeddings")
+    assert calls[0][1] == {
+        "model": "Qwen3-Embedding-0.6B-GGUF-Q8_0",
+        "input": ["Instruct: retrieve hydrology papers\nQuery: hydrology"],
+    }
+    assert [len(call[1]["input"]) for call in calls[1:]] == [2, 1]
+
+
 def test_detailed_instruction_matches_qwen_format():
     from qwen_embedding_service import detailed_instruction
 
