@@ -304,6 +304,7 @@ version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
+    { name = "huggingface-hub" },
     { name = "openreview-py" },
     { name = "python-dotenv" },
     { name = "requests" },
@@ -339,6 +340,7 @@ requires-dist = [
     { name = "black", marker = "extra == 'dev'", specifier = ">=24" },
     { name = "click", specifier = ">=8.1" },
     { name = "fastapi", marker = "extra == 'embedding'", specifier = ">=0.115" },
+    { name = "huggingface-hub", specifier = ">=0.30,<2" },
     { name = "openreview-py", specifier = ">=2.4,<3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "python-dotenv", specifier = ">=1.0" },
