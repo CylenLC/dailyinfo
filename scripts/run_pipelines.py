@@ -161,7 +161,7 @@ def _resolve_fallback_model(explicit: str | None) -> str:
 
 def _post_ai(url: str, api_key: str, model: str, prompt: str, max_tokens: int):
     """Issue a single AI chat completion call and return the parsed JSON."""
-    resp = requests.post(
+    with requests.post(
         url,
         headers={
             "Authorization": f"Bearer {api_key}",
@@ -173,9 +173,9 @@ def _post_ai(url: str, api_key: str, model: str, prompt: str, max_tokens: int):
             "max_tokens": max_tokens,
         },
         timeout=120,
-    )
-    resp.raise_for_status()
-    return resp.json()
+    ) as resp:
+        resp.raise_for_status()
+        return resp.json()
 
 
 def _get_deepseek_key() -> str:
@@ -1248,7 +1248,13 @@ def main() -> int:
     for d in ["papers", "ai_news", "code", "resource", "arxiv", "conference"]:
         path = BRIEFINGS_DIR / d
         if path.exists():
-            files = [f.name for f in sorted(path.iterdir()) if DATE in f.name]
+            try:
+                files = [f.name for f in sorted(path.iterdir()) if DATE in f.name]
+            except OSError as exc:
+                # Do not turn a resource-exhaustion diagnostic into a second
+                # traceback while rendering the summary.
+                log(f"  {d}/: unavailable ({exc})")
+                continue
             log(f'  {d}/: {len(files)} today - {", ".join(files)}')
 
     log(f"Total: {total_saved} files saved")

@@ -208,6 +208,16 @@ class OpenReviewProvider:
             self._authenticated = True
         return openreview.api.OpenReviewClient(**kwargs)
 
+    def close(self) -> None:
+        """Close any HTTP session owned by openreview-py, when exposed."""
+        for owner in (self.client, getattr(self.client, "api_client", None)):
+            for name in ("session", "_session"):
+                session = getattr(owner, name, None)
+                close = getattr(session, "close", None)
+                if callable(close):
+                    close()
+                    return
+
     def _visible(self, note: Any) -> bool:
         # A guest client cannot receive private notes.  An authenticated client
         # must prove public visibility explicitly before content can leave this

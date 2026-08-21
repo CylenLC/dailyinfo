@@ -138,8 +138,16 @@ class QwenEmbeddingClient:
                 json=payload,
                 timeout=self.config.timeout_seconds,
             )
-            response.raise_for_status()
-            data = response.json()
+            try:
+                response.raise_for_status()
+                data = response.json()
+            finally:
+                # Explicitly release the underlying socket.  This matters for
+                # long discovery runs and for injected/custom Sessions where
+                # connection pooling is not reliably reclaimed by GC.
+                close = getattr(response, "close", None)
+                if callable(close):
+                    close()
         except (requests.RequestException, ValueError) as exc:
             raise EmbeddingServiceError(
                 f"local embedding service request failed: {exc}"

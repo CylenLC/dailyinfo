@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
+import errno
 import json
 import math
 from pathlib import Path
@@ -546,14 +547,14 @@ class ConferenceState:
         self._init_schema()
 
     def _connect(self):
-        last_error: sqlite3.OperationalError | None = None
+        last_error: Exception | None = None
         for attempt in range(DB_CONNECT_ATTEMPTS):
             try:
                 conn = sqlite3.connect(self.path, timeout=30.0)
                 conn.row_factory = sqlite3.Row
                 conn.execute("PRAGMA busy_timeout=30000")
                 return conn
-            except sqlite3.OperationalError as exc:
+            except (sqlite3.OperationalError, OSError) as exc:
                 last_error = exc
                 message = str(exc).casefold()
                 retryable = any(
@@ -562,7 +563,11 @@ class ConferenceState:
                         "unable to open database file",
                         "database is locked",
                         "database table is locked",
+                        "too many open files",
                     )
+                )
+                retryable = retryable or (
+                    isinstance(exc, OSError) and exc.errno == errno.EMFILE
                 )
                 if not retryable or attempt == DB_CONNECT_ATTEMPTS - 1:
                     raise
