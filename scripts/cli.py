@@ -96,7 +96,13 @@ try:
 
     __version__ = _pkg_version("dailyinfo")
 except Exception:
-    __version__ = "0.0.0"
+    try:
+        import tomllib
+
+        with (PROJECT_ROOT / "pyproject.toml").open("rb") as handle:
+            __version__ = tomllib.load(handle)["project"]["version"]
+    except Exception:
+        __version__ = "0.0.0"
 
 
 @click.group()
@@ -364,7 +370,7 @@ def status():
 
             summaries = ConferenceState(state_path).source_summary()
             if summaries:
-                click.echo("\nOpenReview venues:")
+                click.echo("\nConference sources:")
                 for item in summaries:
                     click.echo(
                         f"  {item['source']:24s}: {item.get('last_outcome') or '-':13s} "
@@ -381,7 +387,7 @@ def status():
                             f"relevant={item.get('run_relevant', 0)}"
                         )
         except Exception as exc:
-            click.echo(f"  OpenReview state unavailable: {exc}")
+            click.echo(f"  Conference state unavailable: {exc}")
 
 
 @cli.command()

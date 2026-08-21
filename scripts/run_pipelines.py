@@ -24,8 +24,11 @@ import time
 import requests
 
 from datasource import DataSource, RSSDataSource, build_feed_url_map
-from conference import ConferenceState, run_conference_source
-from openreview_provider import classify_openreview_error
+from conference import (
+    ConferenceState,
+    classify_conference_error,
+    run_conference_source,
+)
 from paths import BRIEFINGS_DIR, FRESHRSS_DATA, PUSHED_DIR, STATE_DIR
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1071,7 +1074,7 @@ def run_pipeline_resource() -> int:
 
 
 # =====================================================================
-# PIPELINE 6: OpenReview Conference Papers
+# PIPELINE 6: Conference Papers
 # =====================================================================
 def run_pipeline_conference() -> int:
     global CONFERENCE_RUN_FAILED
@@ -1082,7 +1085,7 @@ def run_pipeline_conference() -> int:
     sources = _filter_sources(cfg, "conference", "api")
     saved = 0
     for source_cfg in sources:
-        if source_cfg.get("provider") != "openreview":
+        if source_cfg.get("provider") not in {"openreview", "papervault"}:
             log(f"  {source_cfg.get('name', '?')}: unsupported conference provider")
             CONFERENCE_RUN_FAILED = True
             continue
@@ -1128,10 +1131,10 @@ def run_pipeline_conference() -> int:
                     state.interrupt_run(active["run_id"], f"source error: {exc}")
             except Exception as state_exc:
                 log(f"    STATE_ERROR: {state_exc}")
-            outcome = classify_openreview_error(exc)
+            outcome = classify_conference_error(exc)
             try:
                 ConferenceState(STATE_DIR / "openreview.sqlite3").record_outcome(
-                    name, source_cfg.get("venue_id", ""), outcome, str(exc)
+                    name, source_cfg.get("venue_id", name), outcome, str(exc)
                 )
             except Exception as state_exc:
                 log(f"    STATE_ERROR: {state_exc}")

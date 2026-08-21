@@ -35,6 +35,7 @@ _RELOAD_ORDER = (
     "paths",
     "datasource",
     "openreview_provider",
+    "papervault_provider",
     "conference",
     "run_pipelines",
     "push_to_discord",
@@ -85,6 +86,7 @@ def tmp_data_root(tmp_path, monkeypatch) -> Path:
         "run_pipelines",
         "conference",
         "openreview_provider",
+        "papervault_provider",
         "zotero_notebooklm",
     ):
         sys.modules.pop(name, None)

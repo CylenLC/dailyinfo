@@ -73,6 +73,9 @@ class PaperVaultProvider:
     # The corpus has no forum replies, so unchanged records never need to be
     # re-polled; the conference pipeline uses this to skip re-staging work.
     recheck_unchanged = False
+    # The first scan imports a bulk historical corpus; those papers build
+    # state only, and briefings are reserved for later-scan discoveries.
+    suppress_first_sync = True
 
     def __init__(self, config: dict, downloader: Downloader | None = None):
         self.config = config
@@ -157,6 +160,7 @@ class PaperVaultProvider:
             for line_no, line in enumerate(handle, 1):
                 if line_no <= skip_until:
                     continue
+                last_line_no = line_no
                 lines_in_page += 1
                 try:
                     record = json.loads(line)
@@ -179,11 +183,6 @@ class PaperVaultProvider:
                     lines_in_page = 0
         if papers or lines_in_page:
             page_number += 1
-            # The trailing partial page consumed every remaining line; the
-            # cursor must land on the last line of the file even when the
-            # final buffered chunk ends on a line that failed JSON parsing.
-            with gzip.open(path, "rt", encoding="utf-8", errors="replace") as tail:
-                last_line_no = max(last_line_no, skip_until + sum(1 for _ in tail))
             yield SubmissionPage(
                 papers=papers,
                 cursor_after=str(last_line_no),

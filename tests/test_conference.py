@@ -1,3 +1,4 @@
+import gzip
 import json
 import copy
 from pathlib import Path
@@ -233,6 +234,95 @@ def test_pipeline_is_idempotent_and_detects_review_update(tmp_path):
     assert third.files_saved == 1
     assert third.events_created == 1
     assert len(list((briefings_dir / "conference").glob("*.md"))) == 2
+
+
+def test_papervault_backfill_suppresses_history_and_renders_new_record(tmp_path):
+    from conference import ConferenceState, run_conference_source
+    from papervault_provider import PaperVaultProvider
+
+    corpus = tmp_path / "cache.jsonl.gz"
+    records = [
+        {
+            "conf": "NIPS2023",
+            "paper_name": "Hydrology Flood Forecast",
+            "paper_authors": ["Alice"],
+            "paper_url": "https://example.org/old",
+            "paper_abstract": "Streamflow forecasting for flood prediction.",
+            "paper_code": "#",
+        }
+    ]
+
+    def write_corpus():
+        with gzip.open(corpus, "wt", encoding="utf-8") as handle:
+            for record in records:
+                handle.write(json.dumps(record) + "\n")
+
+    write_corpus()
+    config = {
+        "name": "papervault_ai_conf",
+        "display_name": "PaperVault 顶会论文",
+        "category": "conference",
+        "type": "api",
+        "provider": "papervault",
+        "venue_series": ["NIPS"],
+        "min_year": 2015,
+        "poll_interval_hours": 168,
+        "full_rescan_interval_days": 30,
+        "max_events_per_briefing": 20,
+        "filters": {
+            "strong_domain_keywords": ["hydrology", "streamflow", "flood"],
+            "domain_context_keywords": ["climate"],
+            "method_keywords": ["forecasting"],
+        },
+        "retrieval": {"strategy": "lexical", "version": 3},
+    }
+    provider = PaperVaultProvider(config, downloader=lambda *_args: corpus)
+    calls = []
+
+    def fake_ai(prompt, model="test", max_tokens=0):
+        calls.append(prompt)
+        return "### Hydrology Flood Forecast\n\nSummary."
+
+    state_dir = tmp_path / "state"
+    briefings_dir = tmp_path / "briefings"
+    first = run_conference_source(
+        config,
+        {"model": "test-model"},
+        fake_ai,
+        state_dir,
+        briefings_dir,
+        "2026-08-20",
+        provider=provider,
+    )
+    assert first.files_saved == 0
+    assert calls == []
+    state = ConferenceState(state_dir / "openreview.sqlite3")
+    assert state.pending_events("papervault_ai_conf", 20) == []
+
+    records.append(
+        {
+            "conf": "NIPS2024",
+            "paper_name": "New Streamflow Transformer",
+            "paper_authors": ["Bob"],
+            "paper_url": "https://example.org/new",
+            "paper_abstract": "A transformer for streamflow forecasting.",
+            "paper_code": "#",
+        }
+    )
+    write_corpus()
+    second = run_conference_source(
+        config,
+        {"model": "test-model"},
+        fake_ai,
+        state_dir,
+        briefings_dir,
+        "2026-08-20",
+        force=True,
+        provider=provider,
+    )
+    assert second.files_saved == 1
+    assert second.events_created == 1
+    assert len(calls) == 1
 
 
 def test_union_retrieval_selects_keyword_or_embedding(tmp_path):
