@@ -35,10 +35,14 @@ You wake up to a curated digest of everything relevant to your field — no feed
 
 ### OpenReview conference pipeline
 
-Pipeline 6 supports ICLR 2026, ICML 2026, and NeurIPS 2026 through the
+Pipeline 6 supports the configured major conference venues through the
 OpenReview API v2. It uses a resumable SQLite checkpoint at
 `~/.myagentdata/dailyinfo/state/openreview.sqlite3` and processes discovery,
 retrieval, public forum updates, and briefing rendering as separate phases.
+The configured 2026 venues are ICLR, ICML, NeurIPS (formerly NIPS), AAAI, KDD
+(both Research Track cycles), CVPR, ACL, and EMNLP. ICCV and NAACL use their
+latest available main OpenReview venues (2025); neither has a 2026 main venue
+in OpenReview.
 
 - New and changed submissions are detected incrementally using a timestamp watermark.
 - A periodic full rescan repairs missed pages and detects changes to reviews, rebuttals, decisions, and status fields on older papers.
@@ -132,6 +136,7 @@ dailyinfo push
 | `dailyinfo run -p 5` | Pipeline 5: university/resource |
 | `dailyinfo run -p 6` | Pipeline 6: OpenReview conference papers |
 | `dailyinfo run -p 6 --source openreview_iclr_2026` | Run one conference source only |
+| `dailyinfo run -p 6 --source openreview_cvpr_2026` | Run CVPR 2026 only |
 | `dailyinfo status` | Show OpenReview checkpoint phase and progress |
 | `dailyinfo run -f all` | Force regeneration for all sources |
 | `dailyinfo push` | Push pending briefings to Discord and archive them |

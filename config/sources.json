@@ -4,7 +4,34 @@
     "model": "deepseek-v4-pro",
     "lookback_hours": 24,
     "max_articles_per_batch": 10,
-    "freshrss_user": ""
+    "freshrss_user": "",
+    "conference_defaults": {
+      "public_only": true,
+      "poll_interval_hours": 24,
+      "full_rescan_interval_days": 7,
+      "max_events_per_briefing": 10,
+      "filters": {
+        "version": 2,
+        "exclude_phrases": ["watermark", "watermarking"]
+      },
+      "retrieval": {
+        "strategy": "lexical_embedding_union",
+        "backend": "llama_cpp",
+        "endpoint": "http://127.0.0.1:8765",
+        "model": "Qwen3-Embedding-0.6B-GGUF-Q8_0",
+        "query_instruction": "Retrieve conference papers relevant to AI for hydrology and water resources.",
+        "query_text": "AI for hydrology and water resources research, including rainfall-runoff and streamflow forecasting, flood prediction, watershed and river modelling, precipitation, hydroclimate, remote sensing of water, physics-informed machine learning, and foundation models for Earth-system prediction.",
+        "text_mode": "title_abstract",
+        "dimension": 512,
+        "threshold": 0.45,
+        "batch_size": 2,
+        "max_length": 1024
+      },
+      "reviews": {
+        "enabled": true,
+        "min_reviews_for_signal": 2
+      }
+    }
   },
   "prompt_templates": {
     "one_line_summary": "请为以下 {count} 篇 {display_name} 最新文章各生成一句话中文摘要，突出核心发现或贡献：\n\n{article_list}\n\n请严格按以下 Markdown 格式返回：\n\n## 📚 {display_name} 今日简报 ({date}) - {count}篇文章\n\n1. **文章标题**\n   > 一句话中文摘要\n\n2. **文章标题**\n   > 一句话中文摘要\n\n...\n\n最后添加一段 **🔭 Today's Highlight** 总结今日最值得关注的研究方向。",
@@ -660,6 +687,7 @@
       "type": "api",
       "provider": "openreview",
       "venue_id": "ICLR.cc/2026/Conference",
+      "url": "https://openreview.net/group?id=ICLR.cc%2F2026%2FConference",
       "enabled": true,
       "public_only": true,
       "poll_interval_hours": 168,
@@ -688,6 +716,7 @@
       "type": "api",
       "provider": "openreview",
       "venue_id": "ICML.cc/2026/Conference",
+      "url": "https://openreview.net/group?id=ICML.cc%2F2026%2FConference",
       "enabled": true,
       "public_only": true,
       "poll_interval_hours": 168,
@@ -716,6 +745,7 @@
       "type": "api",
       "provider": "openreview",
       "venue_id": "NeurIPS.cc/2026/Conference",
+      "url": "https://openreview.net/group?id=NeurIPS.cc%2F2026%2FConference",
       "enabled": true,
       "public_only": true,
       "poll_interval_hours": 24,
@@ -736,6 +766,90 @@
         "max_length": 1024
       },
       "reviews": {"enabled": true, "min_reviews_for_signal": 2}
+    },
+    {
+      "name": "openreview_aaai_2026",
+      "display_name": "AAAI 2026",
+      "category": "conference",
+      "type": "api",
+      "provider": "openreview",
+      "venue_id": "AAAI.org/2026/Conference",
+      "url": "https://openreview.net/group?id=AAAI.org%2F2026%2FConference",
+      "enabled": true
+    },
+    {
+      "name": "openreview_kdd_2026",
+      "display_name": "KDD 2026 Research Track (August)",
+      "category": "conference",
+      "type": "api",
+      "provider": "openreview",
+      "venue_id": "KDD.org/2026/Research_Track_August",
+      "url": "https://openreview.net/group?id=KDD.org%2F2026%2FResearch_Track_August",
+      "enabled": true
+    },
+    {
+      "name": "openreview_kdd_2026_cycle2",
+      "display_name": "KDD 2026 Research Track (Cycle 2)",
+      "category": "conference",
+      "type": "api",
+      "provider": "openreview",
+      "venue_id": "KDD.org/2026/Research_Track_Cycle_2",
+      "url": "https://openreview.net/group?id=KDD.org%2F2026%2FResearch_Track_Cycle_2",
+      "enabled": true
+    },
+    {
+      "name": "openreview_cvpr_2026",
+      "display_name": "CVPR 2026",
+      "category": "conference",
+      "type": "api",
+      "provider": "openreview",
+      "venue_id": "thecvf.com/CVPR/2026/Conference",
+      "url": "https://openreview.net/group?id=thecvf.com%2FCVPR%2F2026%2FConference",
+      "enabled": true
+    },
+    {
+      "name": "openreview_acl_2026",
+      "display_name": "ACL 2026",
+      "category": "conference",
+      "type": "api",
+      "provider": "openreview",
+      "venue_id": "aclweb.org/ACL/2026/Conference",
+      "url": "https://openreview.net/group?id=aclweb.org%2FACL%2F2026%2FConference",
+      "enabled": true
+    },
+    {
+      "name": "openreview_emnlp_2026",
+      "display_name": "EMNLP 2026",
+      "category": "conference",
+      "type": "api",
+      "provider": "openreview",
+      "venue_id": "EMNLP/2026/Conference",
+      "url": "https://openreview.net/group?id=EMNLP%2F2026%2FConference",
+      "enabled": true
+    },
+    {
+      "name": "openreview_iccv_2025",
+      "display_name": "ICCV 2025 (latest main conference)",
+      "category": "conference",
+      "type": "api",
+      "provider": "openreview",
+      "venue_id": "thecvf.com/ICCV/2025/Conference",
+      "url": "https://openreview.net/group?id=thecvf.com%2FICCV%2F2025%2FConference",
+      "poll_interval_hours": 168,
+      "full_rescan_interval_days": 30,
+      "enabled": true
+    },
+    {
+      "name": "openreview_naacl_2025",
+      "display_name": "NAACL 2025 (latest main conference)",
+      "category": "conference",
+      "type": "api",
+      "provider": "openreview",
+      "venue_id": "aclweb.org/NAACL/2025/Conference",
+      "url": "https://openreview.net/group?id=aclweb.org%2FNAACL%2F2025%2FConference",
+      "poll_interval_hours": 168,
+      "full_rescan_interval_days": 30,
+      "enabled": true
     }
   ],
   "discord_channels": {

@@ -74,7 +74,8 @@ specific source names (matches `config/sources.json`).
 
 Pipeline 6 is not a resident daemon. Run it from cron, launchd, or another
 external scheduler. Each source checks its configured `poll_interval_hours`:
-ICLR/ICML are currently polled every 168 hours, while NeurIPS is polled daily.
+active 2026 venues default to daily polling; the completed ICCV/NAACL 2025
+venues and the existing ICLR/ICML sources use a longer interval.
 `full_rescan_interval_days` controls when the entire venue is scanned again to
 find updates to older papers and public reviews; it does not delete old state.
 

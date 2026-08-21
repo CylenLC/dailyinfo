@@ -57,6 +57,14 @@ This page is generated from [`config/sources.json`](https://github.com/iHeadWate
 | dlut_recruitment | 大连理工大学 - 招聘信息 | resource | api | True | 24 | https://job.dlut.edu.cn/f/recruitmentinfo/ajax_frontRecruitinfo |
 | dlut_internship | 大连理工大学 - 实习信息 | resource | api | True | 24 | https://job.dlut.edu.cn/f/recruitmentinfo/ajax_frontRecruitinfo |
 | dlut_transfer_recruitment | 大连理工大学 - 选调生 | resource | api | True | 24 | https://job.dlut.edu.cn/f/recruitmentinfo/ajax_frontRecruitinfo |
-| openreview_iclr_2026 | ICLR 2026 | conference | api | True | 168 |  |
-| openreview_icml_2026 | ICML 2026 | conference | api | True | 168 |  |
-| openreview_neurips_2026 | NeurIPS 2026 | conference | api | True | 24 |  |
+| openreview_iclr_2026 | ICLR 2026 | conference | api | True | 168 | https://openreview.net/group?id=ICLR.cc%2F2026%2FConference |
+| openreview_icml_2026 | ICML 2026 | conference | api | True | 168 | https://openreview.net/group?id=ICML.cc%2F2026%2FConference |
+| openreview_neurips_2026 | NeurIPS 2026 | conference | api | True | 24 | https://openreview.net/group?id=NeurIPS.cc%2F2026%2FConference |
+| openreview_aaai_2026 | AAAI 2026 | conference | api | True | 24 | https://openreview.net/group?id=AAAI.org%2F2026%2FConference |
+| openreview_kdd_2026 | KDD 2026 Research Track (August) | conference | api | True | 24 | https://openreview.net/group?id=KDD.org%2F2026%2FResearch_Track_August |
+| openreview_kdd_2026_cycle2 | KDD 2026 Research Track (Cycle 2) | conference | api | True | 24 | https://openreview.net/group?id=KDD.org%2F2026%2FResearch_Track_Cycle_2 |
+| openreview_cvpr_2026 | CVPR 2026 | conference | api | True | 24 | https://openreview.net/group?id=thecvf.com%2FCVPR%2F2026%2FConference |
+| openreview_acl_2026 | ACL 2026 | conference | api | True | 24 | https://openreview.net/group?id=aclweb.org%2FACL%2F2026%2FConference |
+| openreview_emnlp_2026 | EMNLP 2026 | conference | api | True | 24 | https://openreview.net/group?id=EMNLP%2F2026%2FConference |
+| openreview_iccv_2025 | ICCV 2025 (latest main conference) | conference | api | True | 168 | https://openreview.net/group?id=thecvf.com%2FICCV%2F2025%2FConference |
+| openreview_naacl_2025 | NAACL 2025 (latest main conference) | conference | api | True | 168 | https://openreview.net/group?id=aclweb.org%2FNAACL%2F2025%2FConference |

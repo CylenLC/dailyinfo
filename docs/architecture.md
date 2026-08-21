@@ -115,6 +115,8 @@ DailyInfo 是面向 AI for Science 研究者的自动化情报聚合与精读系
 ### Pipeline 6: OpenReview Conference Papers
 - **Input**: OpenReview API v2 submissions and public forum replies
 - **Output**: `briefings/conference/`
+- **Venues**: ICLR, ICML, NeurIPS/NIPS, AAAI, KDD Research Track cycles, CVPR,
+  ACL, EMNLP, plus the latest available ICCV and NAACL main venues
 - **状态**：`state/openreview.sqlite3` 保存 venue 水位线、相关论文快照和确定性事件
 - **增量**：submission 水位线 + 已相关论文 forum 轮询 + 周期性全量校准
 - **轮询**：由外部调度器重复调用 `dailyinfo run`；`poll_interval_hours` 决定本次是否到期，`full_rescan_interval_days` 决定何时重新遍历整个 venue

@@ -576,6 +576,27 @@ def _filter_sources(cfg: dict, category: str, *types: str) -> list[dict]:
     ]
 
 
+def _resolve_conference_source(source: dict, defaults: dict) -> dict:
+    """Apply shared OpenReview defaults while preserving source overrides.
+
+    Conference entries only need to declare their venue identity. Nested
+    dictionaries are merged so a venue can override one retrieval or review
+    option without copying the complete profile into ``sources.json``.
+    """
+
+    profile = defaults.get("conference_defaults", {})
+    if not isinstance(profile, dict) or not profile:
+        return source
+    resolved = dict(profile)
+    for key, value in source.items():
+        inherited = resolved.get(key)
+        if isinstance(inherited, dict) and isinstance(value, dict):
+            resolved[key] = {**inherited, **value}
+        else:
+            resolved[key] = value
+    return resolved
+
+
 def _process_regular_source(ds, feed_cfg: dict, model_default: str,
                             templates: dict, default_tmpl_key: str) -> int:
     """Process a single source: fetch -> batch -> AI -> merge -> save -> commit.
@@ -1082,6 +1103,7 @@ def run_pipeline_conference() -> int:
     sources = _filter_sources(cfg, "conference", "api")
     saved = 0
     for source_cfg in sources:
+        source_cfg = _resolve_conference_source(source_cfg, defaults)
         if source_cfg.get("provider") != "openreview":
             log(f"  {source_cfg.get('name', '?')}: unsupported conference provider")
             CONFERENCE_RUN_FAILED = True
