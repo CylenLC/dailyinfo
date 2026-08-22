@@ -17,6 +17,8 @@ import unicodedata
 from typing import Any, Callable
 import uuid
 
+import requests
+
 from embedding_retrieval import (
     EmbeddingRetrievalConfig,
     LlamaCppEmbeddingClient,
@@ -29,8 +31,14 @@ from openreview_provider import (
     content_value,
     invitation_matches,
 )
+from conference_figures import (
+    extract_architecture_figure,
+    download_pdf,
+    pdf_sha256,
+    write_cached_extraction,
+)
 
-STATE_SCHEMA_VERSION = 3
+STATE_SCHEMA_VERSION = 4
 RUN_ACTIVE = "RUNNING"
 RUN_INTERRUPTED = "INTERRUPTED"
 RUN_COMPLETE = "COMPLETE"
@@ -443,6 +451,7 @@ def build_snapshot(
     paper_view = {
         key: paper.get(key)
         for key in (
+            "note_id",
             "forum_id",
             "number",
             "title",
@@ -452,6 +461,7 @@ def build_snapshot(
             "venue",
             "venue_id",
             "pdf",
+            "pdf_field",
             "code_url",
             "cdate",
             "mdate",
@@ -483,7 +493,16 @@ def build_snapshot(
     }
     content_fingerprint = {
         key: paper_view.get(key)
-        for key in ("title", "abstract", "authors", "keywords", "pdf")
+        for key in (
+            "title",
+            "abstract",
+            "authors",
+            "keywords",
+            "pdf",
+            "pdf_field",
+            "note_id",
+            "mdate",
+        )
     }
     if paper_view.get("code_url"):
         content_fingerprint["code_url"] = paper_view["code_url"]
@@ -618,6 +637,19 @@ class ConferenceState:
                     briefing_filename TEXT,
                     created_ms INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS figure_assets (
+                    source TEXT NOT NULL,
+                    forum_id TEXT NOT NULL,
+                    revision_key TEXT NOT NULL,
+                    pdf_sha256 TEXT,
+                    extractor_version TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    manifest_json TEXT,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT,
+                    updated_ms INTEGER NOT NULL,
+                    PRIMARY KEY(source, forum_id, revision_key, extractor_version)
+                );
                 CREATE TABLE IF NOT EXISTS sync_runs (
                     run_id TEXT PRIMARY KEY,
                     source TEXT NOT NULL,
@@ -673,10 +705,12 @@ class ConferenceState:
                     f"unsupported conference state schema {current['value']}"
                 )
             if current and int(current["value"]) < STATE_SCHEMA_VERSION:
-                raise RuntimeError(
-                    "conference state schema is outdated; remove the state database "
-                    "and run Pipeline 6 again"
-                )
+                # v4 only adds the figure_assets cache table.  Keep existing
+                # venue cursors/events and advance the metadata in-place.
+                if int(current["value"]) != 3:
+                    raise RuntimeError(
+                        "conference state schema is too old for automatic migration"
+                    )
             conn.execute(
                 "INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)",
                 (str(STATE_SCHEMA_VERSION),),
@@ -1145,6 +1179,117 @@ class ConferenceState:
             result.append(item)
         return result
 
+    def figure_events_needing_refresh(
+        self,
+        source: str,
+        config: dict,
+        extractor_version: str,
+        max_attempts: int,
+        limit: int,
+    ) -> list[dict]:
+        """Return rendered events whose figure asset is stale or retryable.
+
+        Text briefings are intentionally independent from figure enrichment.
+        This query lets a later run repair a previously rendered sidecar after
+        a transient OpenReview 403/429 or a rendering configuration change
+        without regenerating the AI briefing.
+        """
+
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT DISTINCT e.*,
+                          f.extractor_version AS figure_extractor_version,
+                          f.revision_key AS figure_revision_key,
+                          f.status AS figure_status,
+                          f.attempts AS figure_attempts
+                   FROM events e
+                   JOIN figure_assets f
+                     ON f.source=e.source AND f.forum_id=e.forum_id
+                   WHERE e.source=? AND e.status='rendered'
+                     AND f.status IN ('READY','RETRY','NO_FIGURE')
+                   ORDER BY e.created_ms,e.event_id LIMIT ?""",
+                (source, limit),
+            ).fetchall()
+        result = []
+        seen_event_ids = set()
+        for row in rows:
+            item = dict(row)
+            for key in ("event_types_json", "before_json", "after_json"):
+                item[key] = json.loads(item[key]) if item.get(key) else None
+            if item["event_id"] in seen_event_ids:
+                continue
+            seen_event_ids.add(item["event_id"])
+            after = item.get("after_json") or {}
+            revision_key = _figure_revision_key(after, config)
+            stale = item.get("figure_extractor_version") != extractor_version or item.get(
+                "figure_revision_key"
+            ) != revision_key
+            retryable = item.get("figure_status") == "RETRY" and int(
+                item.get("figure_attempts") or 0
+            ) < max_attempts
+            if not stale and not retryable:
+                continue
+            result.append(item)
+        return result
+
+    def figure_asset(
+        self, source: str, forum_id: str, revision_key: str, extractor_version: str
+    ) -> dict:
+        with self._connect() as conn:
+            row = conn.execute(
+                """SELECT * FROM figure_assets
+                   WHERE source=? AND forum_id=? AND revision_key=?
+                     AND extractor_version=?""",
+                (source, forum_id, revision_key, extractor_version),
+            ).fetchone()
+        if not row:
+            return {}
+        value = dict(row)
+        value["manifest_json"] = (
+            json.loads(value["manifest_json"])
+            if value.get("manifest_json")
+            else None
+        )
+        return value
+
+    def save_figure_asset(
+        self,
+        source: str,
+        forum_id: str,
+        revision_key: str,
+        extractor_version: str,
+        *,
+        status: str,
+        pdf_hash: str = "",
+        manifest: dict | None = None,
+        error: str = "",
+        attempts: int = 0,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """INSERT INTO figure_assets(
+                    source,forum_id,revision_key,pdf_sha256,extractor_version,
+                    status,manifest_json,attempts,last_error,updated_ms
+                ) VALUES(?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(source,forum_id,revision_key,extractor_version)
+                DO UPDATE SET pdf_sha256=excluded.pdf_sha256,
+                    status=excluded.status,manifest_json=excluded.manifest_json,
+                    attempts=excluded.attempts,last_error=excluded.last_error,
+                    updated_ms=excluded.updated_ms""",
+                (
+                    source,
+                    forum_id,
+                    revision_key,
+                    pdf_hash or None,
+                    extractor_version,
+                    status,
+                    _canonical(manifest) if manifest is not None else None,
+                    int(attempts),
+                    error[:1000] if error else None,
+                    _now_ms(),
+                ),
+            )
+
     def mark_rendered(self, events: list[dict], filename: str) -> None:
         with self._connect() as conn:
             for event in events:
@@ -1329,7 +1474,7 @@ def _briefing_prompt(source: str, display_name: str, events: list[dict]) -> str:
 要求：
 1. 每篇论文一个三级标题，直接使用论文题目；如有状态变化，可在标题后简要标注状态。
 2. 保留会议、作者、OpenReview、PDF、状态、检索命中方式和评审统计；paper.code_url 非空时必须输出“Link To Code”；链接必须使用输入值。
-3. 用一段话总结研究内容，再写“为什么值得关注”。DeepSeek 只负责本简报的总结，不参与论文相关度筛选。
+3. 每篇论文只用一段话直接介绍研究内容、方法和主要结果；不要输出“为什么值得关注”或类似栏目。DeepSeek 只负责本简报的总结，不参与论文相关度筛选。
 4. 评审评分必须优先展示 raw_review_ratings 中的 OpenReview 原始值，原样保留其数字或标签；归一化统计只能作为补充，不能冒充原始评分。
 5. relevance.categories 只表示关键词/Embedding 的检索命中方式；relevance.score 是 Embedding 余弦相似度（仅关键词模式时为本地布尔值），不得写成 DeepSeek 或 AI 相关度评分，也不要与 OpenReview 评分混淆。
 6. 单列“Paper Decision”，保留 decision 原始值并结合 decision_text 简要概括；decision 缺失时只写“尚未获取公开决定”。不得从评分猜测论文质量或 Oral/Spotlight。
@@ -1343,6 +1488,223 @@ def _briefing_prompt(source: str, display_name: str, events: list[dict]) -> str:
 """
 
 
+def _figure_revision_key(after: dict, config: dict) -> str:
+    paper = after.get("paper") or {}
+    return stable_hash(
+        {
+            "note_id": paper.get("note_id") or paper.get("forum_id"),
+            "pdf": paper.get("pdf"),
+            "pdf_field": paper.get("pdf_field"),
+            "mdate": paper.get("mdate"),
+            "camera_ready": after.get("camera_ready", False),
+            "extractor_version": config.get("extractor_version", "caption-v2"),
+            "render_dpi": config.get("render_dpi", 360),
+            "max_image_mb": config.get("max_image_mb", 8),
+            "max_pages": config.get("max_pages", 15),
+            "min_caption_score": config.get("min_caption_score", 4),
+        }
+    )[:32]
+
+
+def _prepare_figure_assets(
+    state: ConferenceState,
+    source: str,
+    events: list[dict],
+    config: dict,
+    assets_root: Path,
+    pdf_session: Any = None,
+    pdf_headers: dict[str, str] | None = None,
+) -> list[dict]:
+    """Best-effort enrichment for a rendered event batch.
+
+    Figure failures are recorded and omitted from the attachment manifest; a
+    broken PDF must never prevent the text briefing from being generated.
+    """
+
+    figure_cfg = config.get("figures", {}) or {}
+    if figure_cfg.get("enabled", False) is not True:
+        return []
+    extractor_version = str(
+        figure_cfg.get("extractor_version", "caption-v2")
+    )
+    max_attempts = max(1, int(figure_cfg.get("max_attempts", 2)))
+    attachments: list[dict] = []
+    for event in events:
+        after = event["after_json"]
+        paper = after.get("paper") or {}
+        forum_id = str(event.get("forum_id") or paper.get("forum_id") or "")
+        if not forum_id:
+            continue
+        revision_key = _figure_revision_key(after, figure_cfg)
+        cached = state.figure_asset(
+            source, forum_id, revision_key, extractor_version
+        )
+        cached_manifest = cached.get("manifest_json") or {}
+        cached_path = Path(str(cached_manifest.get("path") or ""))
+        if (
+            cached.get("status") == "READY"
+            and cached_path.is_file()
+            and cached_manifest.get("path")
+        ):
+            attachments.append(
+                {
+                    "event_id": event["event_id"],
+                    "forum_id": forum_id,
+                    "title": paper.get("title", ""),
+                    "manifest": cached_manifest,
+                }
+            )
+            continue
+        if cached.get("status") == "NO_FIGURE":
+            continue
+        attempts = int(cached.get("attempts") or 0)
+        if attempts >= max_attempts:
+            continue
+        try:
+            note_id = str(paper.get("note_id") or forum_id)
+            pdf_url = str(paper.get("pdf") or paper.get("pdf_field") or "")
+            pdf_bytes = download_pdf(
+                pdf_url,
+                note_id=note_id,
+                session=pdf_session or requests,
+                headers=pdf_headers,
+                max_bytes=int(figure_cfg.get("max_pdf_mb", 50)) * 1024 * 1024,
+            )
+            digest = pdf_sha256(pdf_bytes)
+            extraction = extract_architecture_figure(
+                pdf_bytes,
+                max_pages=int(figure_cfg.get("max_pages", 15)),
+                render_dpi=int(figure_cfg.get("render_dpi", 360)),
+                min_score=int(figure_cfg.get("min_caption_score", 4)),
+                max_image_bytes=int(
+                    figure_cfg.get("max_image_mb", 8)
+                )
+                * 1024
+                * 1024,
+                extractor_version=extractor_version,
+            )
+            manifest = write_cached_extraction(
+                extraction,
+                assets_root=assets_root,
+                source=source,
+                forum_id=forum_id,
+                pdf_hash=digest,
+            )
+            state.save_figure_asset(
+                source,
+                forum_id,
+                revision_key,
+                extractor_version,
+                status=extraction.status,
+                pdf_hash=digest,
+                manifest=manifest,
+                attempts=attempts + 1,
+            )
+            if extraction.status == "READY":
+                attachments.append(
+                    {
+                        "event_id": event["event_id"],
+                        "forum_id": forum_id,
+                        "title": paper.get("title", ""),
+                        "manifest": manifest,
+                    }
+                )
+        except Exception as exc:
+            state.save_figure_asset(
+                source,
+                forum_id,
+                revision_key,
+                extractor_version,
+                status="RETRY" if attempts + 1 < max_attempts else "FAILED",
+                error=str(exc),
+                attempts=attempts + 1,
+            )
+    return attachments
+
+
+def _retry_rendered_figure_assets(
+    state: ConferenceState,
+    source: str,
+    config: dict,
+    briefings_dir: Path,
+    assets_root: Path,
+    pdf_session: Any = None,
+    pdf_headers: dict[str, str] | None = None,
+) -> int:
+    """Repair sidecars for already-rendered events after a download failure."""
+
+    figure_cfg = config.get("figures", {}) or {}
+    if figure_cfg.get("enabled", False) is not True:
+        return 0
+    extractor_version = str(
+        figure_cfg.get("extractor_version", "caption-v2")
+    )
+    max_attempts = max(1, int(figure_cfg.get("max_attempts", 2)))
+    retry_events = state.figure_events_needing_refresh(
+        source,
+        config,
+        extractor_version,
+        max_attempts,
+        max(
+            1,
+            int(
+                figure_cfg.get(
+                    "refresh_batch_size",
+                    max(100, int(config.get("max_events_per_briefing", 10))),
+                )
+            ),
+        ),
+    )
+    if not retry_events:
+        return 0
+    attachments = _prepare_figure_assets(
+        state,
+        source,
+        retry_events,
+        config,
+        assets_root,
+        pdf_session=pdf_session,
+        pdf_headers=pdf_headers,
+    )
+    by_event = {str(item.get("event_id")): item for item in attachments}
+    grouped: dict[str, list[dict]] = {}
+    for event in retry_events:
+        attachment = by_event.get(str(event["event_id"]))
+        filename = str(event.get("briefing_filename") or "")
+        if attachment and filename:
+            grouped.setdefault(filename, []).append(attachment)
+    updated = 0
+    for filename, new_attachments in grouped.items():
+        sidecar_candidates = [
+            Path(briefings_dir) / "conference" / filename,
+            Path(briefings_dir).parent / "pushed" / "conference" / filename,
+        ]
+        sidecar = next(
+            (
+                candidate.with_suffix(".assets.json")
+                for candidate in sidecar_candidates
+                if candidate.with_suffix(".assets.json").is_file()
+            ),
+            None,
+        )
+        if sidecar is None:
+            continue
+        try:
+            payload = json.loads(sidecar.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        existing = payload.get("attachments", [])
+        existing_ids = {str(item.get("event_id")) for item in existing}
+        existing.extend(
+            item for item in new_attachments
+            if str(item.get("event_id")) not in existing_ids
+        )
+        payload["attachments"] = existing
+        _atomic_write(sidecar, json.dumps(payload, ensure_ascii=False, indent=2))
+        updated += len(new_attachments)
+    return updated
+
+
 def _render_pending_events(
     state: ConferenceState,
     source: str,
@@ -1352,7 +1714,20 @@ def _render_pending_events(
     call_ai: Callable[..., str],
     briefings_dir: Path,
     date: str,
+    pdf_session: Any = None,
+    pdf_headers: dict[str, str] | None = None,
 ) -> int:
+    assets_root = Path(briefings_dir).parent / "assets"
+    # Repair previously rendered sidecars before handling a new text batch.
+    _retry_rendered_figure_assets(
+        state,
+        source,
+        config,
+        briefings_dir,
+        assets_root,
+        pdf_session=pdf_session,
+        pdf_headers=pdf_headers,
+    )
     pending = state.pending_events(
         source, int(config.get("max_events_per_briefing", 10))
     )
@@ -1361,6 +1736,25 @@ def _render_pending_events(
     batch_hash = stable_hash([event["event_id"] for event in pending])[:12]
     filename = f"{source}_briefing_{date}_{batch_hash}.md"
     target = Path(briefings_dir) / "conference" / filename
+    attachments = _prepare_figure_assets(
+        state,
+        source,
+        pending,
+        config,
+        assets_root,
+        pdf_session=pdf_session,
+        pdf_headers=pdf_headers,
+    )
+    sidecar = target.with_suffix(".assets.json")
+    sidecar_payload = {
+        "schema": 1,
+        "briefing": filename,
+        "attachments": attachments,
+    }
+    _atomic_write(
+        sidecar,
+        json.dumps(sidecar_payload, ensure_ascii=False, indent=2),
+    )
     if not target.exists():
         prompt = _briefing_prompt(source, display_name, pending)
         content = _clean_conference_briefing(
@@ -1462,6 +1856,13 @@ def run_conference_source(
     state = ConferenceState(Path(state_dir) / "openreview.sqlite3")
     venue_state = state.venue(source)
     active = state.active_run(source)
+    # Keep the provider's authenticated HTTP session available for PDF
+    # attachment fallback.  OpenReview may challenge anonymous requests to
+    # the web-facing PDF route even when the API client can fetch attachments.
+    provider = provider or OpenReviewProvider(config)
+    pdf_client = getattr(provider, "client", None)
+    pdf_session = getattr(pdf_client, "session", None)
+    pdf_headers = dict(getattr(pdf_client, "headers", {}) or {})
     now = _now_ms()
     poll_hours = float(config.get("poll_interval_hours", 24))
     model = config.get("model") or defaults.get("model", "deepseek-v4-pro")
@@ -1508,12 +1909,13 @@ def run_conference_source(
             call_ai,
             briefings_dir,
             date,
+            pdf_session=pdf_session,
+            pdf_headers=pdf_headers,
         )
         return ConferenceRunResult(
             source, "SUCCESS" if rendered else "NOT_DUE", files_saved=rendered
         )
 
-    provider = provider or OpenReviewProvider(config)
     capabilities = provider.discover_venue()
     overlap_ms = int(float(config.get("watermark_overlap_hours", 2)) * 3600 * 1000)
     if active:
@@ -1778,6 +2180,8 @@ def run_conference_source(
             call_ai,
             briefings_dir,
             date,
+            pdf_session=pdf_session,
+            pdf_headers=pdf_headers,
         )
     except Exception as exc:
         state.interrupt_run(run_id, f"render retry required: {exc}")

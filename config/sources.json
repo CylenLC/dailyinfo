@@ -30,6 +30,18 @@
       "reviews": {
         "enabled": true,
         "min_reviews_for_signal": 2
+      },
+      "figures": {
+        "enabled": true,
+        "max_per_paper": 1,
+        "max_pdf_mb": 50,
+        "max_image_mb": 8,
+        "max_pages": 15,
+        "render_dpi": 360,
+        "min_caption_score": 4,
+        "extractor_version": "caption-v2",
+        "max_attempts": 2,
+        "refresh_batch_size": 1000
       }
     }
   },

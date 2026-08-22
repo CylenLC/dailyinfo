@@ -123,6 +123,8 @@ DailyInfo 是面向 AI for Science 研究者的自动化情报聚合与精读系
 - **相关度**：关键词与 Qwen3 Embedding（llama.cpp `/v1/embeddings`）取并集；DeepSeek 只负责最终摘要
 - **事件**：新论文、decision/status 变化、评审新增/修改、rebuttal 更新分别形成可去重事件
 - **可恢复处理**：显式 API 分页，每页提交 `after` cursor；`sync_runs`/`sync_items` 保存 discovery、相关度、forum 阶段和 heartbeat，Ctrl-C 或网络失败后可续跑
+- **架构图增强**：相关论文在渲染前按公开 PDF 的 Figure caption 进行词法召回，用 PyMuPDF 将候选区域栅格化为 PNG；下载按 Note PDF 字段、OpenReview attachment API、`/pdf?id=` 依次回退，并复用可选认证会话；PDF 只临时下载，派生图按 PDF SHA-256 缓存到 `assets/conference/`，失败时文字简报仍可推送，后续运行可只重试失败的图附件
+- **Discord 展示**：会议简报按论文标题分段发送，按 `.assets.json` sidecar 将对应架构图紧跟在论文文字后；推送 receipt 支持中断后跳过已成功的文本/图片部分
 - **进度**：日志输出 discovery/retrieval/forum/rendering 阶段、当前数量、候选数、错误数和 run ID；`dailyinfo status` 显示活跃/中断 run
 - **认证**：默认 guest；可选用户名/密码认证，但 `public_only` 默认过滤非公开 note/字段
 

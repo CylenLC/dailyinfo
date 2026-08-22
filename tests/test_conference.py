@@ -149,6 +149,7 @@ def test_briefing_prompt_requests_raw_ratings_without_internal_disclaimer():
     assert "Reviewer 1" in prompt
     assert "Rebuttal / Author Response" in prompt
     assert "不要输出事件类型" in prompt
+    assert "不要输出“为什么值得关注”" in prompt
 
 
 def test_clean_conference_briefing_removes_internal_boilerplate():

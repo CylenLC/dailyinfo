@@ -408,9 +408,11 @@ class OpenReviewProvider:
 
         authors = content_value(content, "authors", [])
         keywords = content_value(content, "keywords", [])
+        raw_pdf = str(content_value(content, "pdf", "") or "").strip()
         invitations = _as_list(_attr(note, "invitations", []))
         return {
             "id": note_id,
+            "note_id": note_id,
             "forum_id": forum_id,
             "number": _attr(note, "number", None),
             "title": str(content_value(content, "title", "") or "").strip(),
@@ -420,7 +422,10 @@ class OpenReviewProvider:
             "venue": str(content_value(content, "venue", "") or ""),
             "venue_id": venue_id,
             "status": status,
-            "pdf": _absolute_openreview_url(content_value(content, "pdf", "")),
+            "pdf": _absolute_openreview_url(raw_pdf),
+            # Keep the Note field as supplied.  OpenReview uses both relative
+            # attachment paths and absolute URLs across venues/revisions.
+            "pdf_field": raw_pdf,
             "code_url": _link_to_code(content),
             "cdate": int(_attr(note, "cdate", 0) or 0),
             "mdate": int(_attr(note, "tmdate", 0) or _attr(note, "mdate", 0) or 0),
