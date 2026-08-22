@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import sys
 
 import pytest
 
@@ -158,6 +159,152 @@ def test_credentials_can_be_loaded_from_project_env(tmp_path, monkeypatch):
 
     assert provider_module._load_env_value("OPENREVIEW_USERNAME") == "user@example.com"
     assert provider_module._load_env_value("OPENREVIEW_PASSWORD") == "secret"
+
+
+def test_api_timeout_wraps_login_and_followup_requests(monkeypatch):
+    import openreview_provider as provider_module
+    from openreview_provider import OpenReviewProvider
+
+    class FakeSession:
+        def __init__(self):
+            self.calls = []
+
+        def request(self, method, url, **kwargs):
+            self.calls.append((method, url, kwargs))
+            return {"ok": True}
+
+        def post(self, url, **kwargs):
+            return self.request("POST", url, **kwargs)
+
+        def get(self, url, **kwargs):
+            return self.request("GET", url, **kwargs)
+
+    class FakeClient:
+        def __init__(self, baseurl):
+            self.baseurl = baseurl
+            self.session = FakeSession()
+
+        def login_user(self, username, password):
+            self.session.post(self.baseurl + "/login", json={"id": username})
+
+    fake_openreview = SimpleNamespace(
+        api=SimpleNamespace(OpenReviewClient=FakeClient)
+    )
+    monkeypatch.setitem(sys.modules, "openreview", fake_openreview)
+    monkeypatch.setattr(provider_module, "ENV_FILE", provider_module.Path("/missing"))
+    monkeypatch.setenv("OPENREVIEW_USERNAME", "user@example.com")
+    monkeypatch.setenv("OPENREVIEW_PASSWORD", "secret")
+
+    provider = OpenReviewProvider(
+        {
+            "venue_id": "Venue/2026/Conference",
+            "api_connect_timeout_seconds": 3,
+            "api_read_timeout_seconds": 17,
+        }
+    )
+    provider.client.session.get("https://example.test/groups")
+
+    assert provider._authenticated is True
+    assert [call[2]["timeout"] for call in provider.client.session.calls] == [
+        (3.0, 17.0),
+        (3.0, 17.0),
+    ]
+
+
+def test_api_rate_limit_waits_once_before_retry(monkeypatch):
+    import openreview_provider as provider_module
+    from openreview_provider import OpenReviewProvider
+
+    class Response:
+        def __init__(self, status_code, headers=None):
+            self.status_code = status_code
+            self.headers = headers or {}
+
+        def close(self):
+            return None
+
+    class FakeSession:
+        def __init__(self):
+            self.responses = [Response(429, {"Retry-After": "2"}), Response(200)]
+            self.calls = []
+
+        def request(self, method, url, **kwargs):
+            self.calls.append((method, url, kwargs))
+            return self.responses.pop(0)
+
+        def post(self, url, **kwargs):
+            return self.request("POST", url, **kwargs)
+
+    class FakeClient:
+        def __init__(self, baseurl):
+            self.baseurl = baseurl
+            self.session = FakeSession()
+
+        def login_user(self, username, password):
+            self.session.post(self.baseurl + "/login")
+
+    fake_openreview = SimpleNamespace(
+        api=SimpleNamespace(OpenReviewClient=FakeClient)
+    )
+    monkeypatch.setitem(sys.modules, "openreview", fake_openreview)
+    monkeypatch.setattr(provider_module, "ENV_FILE", provider_module.Path("/missing"))
+    monkeypatch.setenv("OPENREVIEW_USERNAME", "user@example.com")
+    monkeypatch.setenv("OPENREVIEW_PASSWORD", "secret")
+    waits = []
+    monkeypatch.setattr(provider_module.time, "sleep", waits.append)
+
+    provider = OpenReviewProvider(
+        {
+            "venue_id": "Venue/2026/Conference",
+            "api_rate_limit_retries": 1,
+            "api_rate_limit_max_wait_seconds": 10,
+        }
+    )
+
+    assert provider._authenticated is True
+    assert waits == [2.0]
+    assert len(provider.client.session.calls) == 2
+
+
+def test_runtime_reuses_one_authenticated_client(monkeypatch):
+    import openreview_provider as provider_module
+    from openreview_provider import OpenReviewRuntime
+
+    class FakeSession:
+        def request(self, _method, _url, **_kwargs):
+            return SimpleNamespace(status_code=200, headers={}, close=lambda: None)
+
+        def post(self, url, **kwargs):
+            return self.request("POST", url, **kwargs)
+
+    class FakeClient:
+        logins = 0
+
+        def __init__(self, baseurl):
+            self.baseurl = baseurl
+            self.session = FakeSession()
+
+        def login_user(self, _username, _password):
+            type(self).logins += 1
+            self.session.post(self.baseurl + "/login")
+
+    fake_openreview = SimpleNamespace(
+        api=SimpleNamespace(OpenReviewClient=FakeClient)
+    )
+    monkeypatch.setitem(sys.modules, "openreview", fake_openreview)
+    monkeypatch.setattr(provider_module, "ENV_FILE", provider_module.Path("/missing"))
+    monkeypatch.setenv("OPENREVIEW_USERNAME", "user@example.com")
+    monkeypatch.setenv("OPENREVIEW_PASSWORD", "secret")
+
+    runtime = OpenReviewRuntime({"venue_id": "Venue/2026/Conference"})
+    first = runtime.provider({"venue_id": "ICLR.cc/2026/Conference"})
+    second = runtime.provider({"venue_id": "ICML.cc/2026/Conference"})
+
+    assert first.client is second.client is runtime.client
+    assert FakeClient.logins == 1
+    assert first._authenticated is True
+    assert second._authenticated is True
+    runtime.close()
 
 
 def test_nonpublic_pipeline_mode_is_rejected():

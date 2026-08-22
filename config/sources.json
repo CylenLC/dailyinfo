@@ -7,12 +7,19 @@
     "freshrss_user": "",
     "conference_defaults": {
       "public_only": true,
+      "api_connect_timeout_seconds": 10,
+      "api_read_timeout_seconds": 30,
+      "api_rate_limit_retries": 1,
+      "api_rate_limit_max_wait_seconds": 90,
       "poll_interval_hours": 24,
       "full_rescan_interval_days": 7,
       "max_events_per_briefing": 10,
       "filters": {
         "version": 2,
-        "exclude_phrases": ["watermark", "watermarking"]
+        "exclude_phrases": [
+          "watermark",
+          "watermarking"
+        ]
       },
       "retrieval": {
         "strategy": "lexical_embedding_union",
@@ -55,7 +62,7 @@
           "min_confidence": 0.55
         },
         "max_attempts": 2,
-        "refresh_batch_size": 1000
+        "refresh_batch_size": 50
       }
     }
   },
@@ -719,7 +726,13 @@
       "poll_interval_hours": 168,
       "full_rescan_interval_days": 30,
       "max_events_per_briefing": 10,
-      "filters": {"version": 2, "exclude_phrases": ["watermark", "watermarking"]},
+      "filters": {
+        "version": 2,
+        "exclude_phrases": [
+          "watermark",
+          "watermarking"
+        ]
+      },
       "retrieval": {
         "strategy": "lexical_embedding_union",
         "backend": "llama_cpp",
@@ -733,7 +746,10 @@
         "batch_size": 2,
         "max_length": 1024
       },
-      "reviews": {"enabled": true, "min_reviews_for_signal": 2}
+      "reviews": {
+        "enabled": true,
+        "min_reviews_for_signal": 2
+      }
     },
     {
       "name": "openreview_icml_2026",
@@ -748,7 +764,13 @@
       "poll_interval_hours": 168,
       "full_rescan_interval_days": 30,
       "max_events_per_briefing": 10,
-      "filters": {"version": 2, "exclude_phrases": ["watermark", "watermarking"]},
+      "filters": {
+        "version": 2,
+        "exclude_phrases": [
+          "watermark",
+          "watermarking"
+        ]
+      },
       "retrieval": {
         "strategy": "lexical_embedding_union",
         "backend": "llama_cpp",
@@ -762,7 +784,10 @@
         "batch_size": 2,
         "max_length": 1024
       },
-      "reviews": {"enabled": true, "min_reviews_for_signal": 2}
+      "reviews": {
+        "enabled": true,
+        "min_reviews_for_signal": 2
+      }
     },
     {
       "name": "openreview_neurips_2026",
@@ -777,7 +802,13 @@
       "poll_interval_hours": 24,
       "full_rescan_interval_days": 7,
       "max_events_per_briefing": 10,
-      "filters": {"version": 2, "exclude_phrases": ["watermark", "watermarking"]},
+      "filters": {
+        "version": 2,
+        "exclude_phrases": [
+          "watermark",
+          "watermarking"
+        ]
+      },
       "retrieval": {
         "strategy": "lexical_embedding_union",
         "backend": "llama_cpp",
@@ -791,7 +822,10 @@
         "batch_size": 2,
         "max_length": 1024
       },
-      "reviews": {"enabled": true, "min_reviews_for_signal": 2}
+      "reviews": {
+        "enabled": true,
+        "min_reviews_for_signal": 2
+      }
     },
     {
       "name": "openreview_aaai_2026",

@@ -48,6 +48,65 @@ def test_pipeline6_main_reports_uncaught_failure(monkeypatch):
     assert rp.main() == 1
 
 
+def test_pipeline_conference_reuses_one_openreview_runtime(monkeypatch):
+    import run_pipelines as rp
+    from conference import ConferenceRunResult
+
+    sources = [
+        {
+            "name": "openreview_iclr_2026",
+            "display_name": "ICLR 2026",
+            "category": "conference",
+            "type": "api",
+            "provider": "openreview",
+            "venue_id": "ICLR.cc/2026/Conference",
+            "enabled": True,
+        },
+        {
+            "name": "openreview_icml_2026",
+            "display_name": "ICML 2026",
+            "category": "conference",
+            "type": "api",
+            "provider": "openreview",
+            "venue_id": "ICML.cc/2026/Conference",
+            "enabled": True,
+        },
+    ]
+    runtime_calls = []
+    provider_calls = []
+
+    class FakeRuntime:
+        def __init__(self, config):
+            runtime_calls.append(config["venue_id"])
+
+        def provider(self, config):
+            provider_calls.append(config["venue_id"])
+            return object()
+
+        def close(self):
+            runtime_calls.append("closed")
+
+    monkeypatch.setattr(rp, "_load_sources", lambda: ({"sources": sources}, {}, {}))
+    monkeypatch.setattr(rp, "OpenReviewRuntime", FakeRuntime)
+    monkeypatch.setattr(
+        rp,
+        "run_conference_source",
+        lambda config, *_args, provider=None, **_kwargs: ConferenceRunResult(
+            config["name"], "SUCCESS", files_saved=0
+        ),
+    )
+    monkeypatch.setattr(rp, "FORCE_SOURCES", set())
+    monkeypatch.setattr(rp, "FORCE_ALL", False)
+    monkeypatch.setattr(rp, "SOURCE_FILTER", set())
+
+    assert rp.run_pipeline_conference() == 0
+    assert runtime_calls == ["ICLR.cc/2026/Conference", "closed"]
+    assert provider_calls == [
+        "ICLR.cc/2026/Conference",
+        "ICML.cc/2026/Conference",
+    ]
+
+
 def test_already_pushed_within_detects_recent_file():
     import run_pipelines as rp
     from paths import PUSHED_DIR

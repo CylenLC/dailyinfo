@@ -28,6 +28,7 @@ from openreview_provider import (
     OpenReviewProvider,
     SubmissionPage,
     VenueCapabilities,
+    classify_openreview_error,
     content_value,
     invitation_matches,
 )
@@ -1776,6 +1777,7 @@ def _prepare_figure_assets(
     pdf_headers: dict[str, str] | None = None,
     call_ai: Callable[..., str] | None = None,
     call_vision_ai: Callable[..., str] | None = None,
+    logger: Callable[[str], None] | None = None,
 ) -> list[dict]:
     """Best-effort enrichment for a rendered event batch.
 
@@ -1792,12 +1794,16 @@ def _prepare_figure_assets(
     max_attempts = max(1, int(figure_cfg.get("max_attempts", 2)))
     review_cfg = dict(figure_cfg.get("caption_review", {}) or {})
     attachments: list[dict] = []
-    for event in events:
+    total = len(events)
+    for index, event in enumerate(events, 1):
         after = event["after_json"]
         paper = after.get("paper") or {}
         forum_id = str(event.get("forum_id") or paper.get("forum_id") or "")
         if not forum_id:
             continue
+        title = str(paper.get("title") or "")[:80]
+        if logger:
+            logger(f"figure {index}/{total} start forum={forum_id} title={title}")
         revision_key = _figure_revision_key(after, figure_cfg)
         cached = state.figure_asset(
             source, forum_id, revision_key, extractor_version
@@ -1817,11 +1823,20 @@ def _prepare_figure_assets(
                     "manifest": cached_manifest,
                 }
             )
+            if logger:
+                logger(f"figure {index}/{total} cached READY forum={forum_id}")
             continue
         if cached.get("status") == "NO_FIGURE":
+            if logger:
+                logger(f"figure {index}/{total} cached NO_FIGURE forum={forum_id}")
             continue
         attempts = int(cached.get("attempts") or 0)
         if attempts >= max_attempts:
+            if logger:
+                logger(
+                    f"figure {index}/{total} skipped attempts={attempts} "
+                    f"forum={forum_id}"
+                )
             continue
         try:
             caption_reviewer, review_cfg = _figure_caption_reviewer(
@@ -1844,6 +1859,8 @@ def _prepare_figure_assets(
             )
             note_id = str(paper.get("note_id") or forum_id)
             pdf_url = str(paper.get("pdf") or paper.get("pdf_field") or "")
+            if logger:
+                logger(f"figure {index}/{total} downloading PDF forum={forum_id}")
             pdf_bytes = download_pdf(
                 pdf_url,
                 note_id=note_id,
@@ -1852,6 +1869,8 @@ def _prepare_figure_assets(
                 max_bytes=int(figure_cfg.get("max_pdf_mb", 50)) * 1024 * 1024,
             )
             digest = pdf_sha256(pdf_bytes)
+            if logger:
+                logger(f"figure {index}/{total} extracting PDF forum={forum_id}")
             extraction = extract_architecture_figure(
                 pdf_bytes,
                 max_pages=int(figure_cfg.get("max_pages", 15)),
@@ -1899,6 +1918,11 @@ def _prepare_figure_assets(
                         "manifest": manifest,
                     }
                 )
+            if logger:
+                logger(
+                    f"figure {index}/{total} done status={extraction.status} "
+                    f"forum={forum_id}"
+                )
         except Exception as exc:
             state.save_figure_asset(
                 source,
@@ -1909,6 +1933,8 @@ def _prepare_figure_assets(
                 error=str(exc),
                 attempts=attempts + 1,
             )
+            if logger:
+                logger(f"figure {index}/{total} failed forum={forum_id}: {exc}")
     return attachments
 
 
@@ -1922,6 +1948,7 @@ def _retry_rendered_figure_assets(
     pdf_headers: dict[str, str] | None = None,
     call_ai: Callable[..., str] | None = None,
     call_vision_ai: Callable[..., str] | None = None,
+    logger: Callable[[str], None] | None = None,
 ) -> int:
     """Repair sidecars for already-rendered events after a download failure."""
 
@@ -1949,6 +1976,8 @@ def _retry_rendered_figure_assets(
     )
     if not retry_events:
         return 0
+    if logger:
+        logger(f"figure refresh start events={len(retry_events)}")
     attachments = _prepare_figure_assets(
         state,
         source,
@@ -1959,6 +1988,7 @@ def _retry_rendered_figure_assets(
         pdf_headers=pdf_headers,
         call_ai=call_ai,
         call_vision_ai=call_vision_ai,
+        logger=logger,
     )
     by_event = {str(item.get("event_id")): item for item in attachments}
     grouped: dict[str, list[dict]] = {}
@@ -2011,6 +2041,7 @@ def _render_pending_events(
     pdf_session: Any = None,
     pdf_headers: dict[str, str] | None = None,
     call_vision_ai: Callable[..., str] | None = None,
+    logger: Callable[[str], None] | None = None,
 ) -> int:
     assets_root = Path(briefings_dir).parent / "assets"
     # Repair previously rendered sidecars before handling a new text batch.
@@ -2024,12 +2055,17 @@ def _render_pending_events(
         pdf_headers=pdf_headers,
         call_ai=call_ai,
         call_vision_ai=call_vision_ai,
+        logger=logger,
     )
     pending = state.pending_events(
         source, int(config.get("max_events_per_briefing", 10))
     )
     if not pending:
+        if logger:
+            logger("pending event render: no pending events")
         return 0
+    if logger:
+        logger(f"pending event render start events={len(pending)}")
     batch_hash = stable_hash([event["event_id"] for event in pending])[:12]
     filename = f"{source}_briefing_{date}_{batch_hash}.md"
     target = Path(briefings_dir) / "conference" / filename
@@ -2043,6 +2079,7 @@ def _render_pending_events(
         pdf_headers=pdf_headers,
         call_ai=call_ai,
         call_vision_ai=call_vision_ai,
+        logger=logger,
     )
     sidecar = target.with_suffix(".assets.json")
     sidecar_payload = {
@@ -2056,11 +2093,21 @@ def _render_pending_events(
     )
     if not target.exists():
         prompt = _briefing_prompt(source, display_name, pending)
+        if logger:
+            logger(
+                f"pending event briefing AI start model={model} "
+                f"events={len(pending)} max_tokens=50000"
+            )
         content = _clean_conference_briefing(
             call_ai(prompt, model=model, max_tokens=50000)
         )
         if not content:
             raise ValueError("conference briefing AI returned empty content")
+        if logger:
+            logger(
+                f"pending event briefing AI done chars={len(content)} "
+                f"file={filename}"
+            )
         _atomic_write(
             target, f"# {display_name} Conference Briefing - {date}\n\n{content}\n"
         )
@@ -2159,10 +2206,21 @@ def run_conference_source(
     # Keep the provider's authenticated HTTP session available for PDF
     # attachment fallback.  OpenReview may challenge anonymous requests to
     # the web-facing PDF route even when the API client can fetch attachments.
-    provider = provider or OpenReviewProvider(config)
+    if provider is None:
+        emit(f"[{display_name}] OpenReview client initializing")
+        try:
+            provider = OpenReviewProvider(config)
+        except Exception as exc:
+            emit(
+                f"[{display_name}] OpenReview client initialization failed: "
+                f"{classify_openreview_error(exc)}: {exc}"
+            )
+            raise
+        emit(f"[{display_name}] OpenReview client initialized")
     pdf_client = getattr(provider, "client", None)
     pdf_session = getattr(pdf_client, "session", None)
     pdf_headers = dict(getattr(pdf_client, "headers", {}) or {})
+    emit(f"[{display_name}] preparing retrieval clients")
     now = _now_ms()
     poll_hours = float(config.get("poll_interval_hours", 24))
     model = config.get("model") or defaults.get("model", "deepseek-v4-pro")
@@ -2194,6 +2252,8 @@ def run_conference_source(
             raise ValueError(
                 f"unsupported embedding backend: {embedding_config.backend}"
             )
+    emit(f"[{display_name}] retrieval clients ready strategy={retrieval_strategy}")
+    emit(f"[{display_name}] checking poll schedule")
     if (
         not active
         and not force
@@ -2212,12 +2272,25 @@ def run_conference_source(
             pdf_session=pdf_session,
             pdf_headers=pdf_headers,
             call_vision_ai=call_vision_ai,
+            logger=emit,
         )
         return ConferenceRunResult(
             source, "SUCCESS" if rendered else "NOT_DUE", files_saved=rendered
         )
 
-    capabilities = provider.discover_venue()
+    emit(f"[{display_name}] discover_venue start venue={config.get('venue_id', '')}")
+    try:
+        capabilities = provider.discover_venue()
+    except Exception as exc:
+        emit(
+            f"[{display_name}] discover_venue failed: "
+            f"{classify_openreview_error(exc)}: {exc}"
+        )
+        raise
+    emit(
+        f"[{display_name}] discover_venue success "
+        f"invitation={capabilities.submission_invitation}"
+    )
     overlap_ms = int(float(config.get("watermark_overlap_hours", 2)) * 3600 * 1000)
     if active:
         mode = active["mode"]
@@ -2484,6 +2557,7 @@ def run_conference_source(
             pdf_session=pdf_session,
             pdf_headers=pdf_headers,
             call_vision_ai=call_vision_ai,
+            logger=emit,
         )
     except Exception as exc:
         state.interrupt_run(run_id, f"render retry required: {exc}")

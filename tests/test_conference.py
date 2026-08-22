@@ -586,6 +586,8 @@ def test_pipeline_emits_phase_progress_logs(tmp_path):
     )
 
     assert result.outcome == "SUCCESS"
+    assert any("discover_venue start" in line for line in logs)
+    assert any("discover_venue success" in line for line in logs)
     assert any("[DISCOVERY]" in line for line in logs)
     assert any("[FORUM_POLL]" in line for line in logs)
     assert any("COMPLETE" in line for line in logs)

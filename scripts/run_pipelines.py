@@ -26,7 +26,10 @@ import requests
 
 from datasource import DataSource, RSSDataSource, build_feed_url_map
 from conference import ConferenceState, run_conference_source
-from openreview_provider import classify_openreview_error
+from openreview_provider import (
+    OpenReviewRuntime,
+    classify_openreview_error,
+)
 from paths import BRIEFINGS_DIR, FRESHRSS_DATA, PUSHED_DIR, STATE_DIR
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1151,6 +1154,8 @@ def run_pipeline_conference() -> int:
     cfg, defaults, _templates = _load_sources()
     sources = _filter_sources(cfg, "conference", "api")
     saved = 0
+    runtime: OpenReviewRuntime | None = None
+    runtime_init_error: Exception | None = None
     for source_cfg in sources:
         source_cfg = _resolve_conference_source(source_cfg, defaults)
         if source_cfg.get("provider") != "openreview":
@@ -1160,6 +1165,17 @@ def run_pipeline_conference() -> int:
         name = source_cfg["name"]
         log(f"  {name}...")
         try:
+            if runtime is None:
+                if runtime_init_error is not None:
+                    raise runtime_init_error
+                log("  [OpenReview] creating shared authenticated runtime")
+                try:
+                    runtime = OpenReviewRuntime(source_cfg)
+                except Exception as exc:
+                    runtime_init_error = exc
+                    raise
+                log("  [OpenReview] shared runtime ready")
+            provider = runtime.provider(source_cfg)
             result = run_conference_source(
                 source_cfg,
                 defaults,
@@ -1168,6 +1184,7 @@ def run_pipeline_conference() -> int:
                 BRIEFINGS_DIR,
                 DATE,
                 force=_is_forced(name),
+                provider=provider,
                 logger=log,
                 call_vision_ai=call_vision_ai,
             )
@@ -1208,6 +1225,9 @@ def run_pipeline_conference() -> int:
             except Exception as state_exc:
                 log(f"    STATE_ERROR: {state_exc}")
             log(f"    {outcome}: {exc}")
+    if runtime is not None:
+        runtime.close()
+        log("  [OpenReview] shared runtime closed")
     log(f"  Pipeline 6 done: {saved} files saved")
     return saved
 

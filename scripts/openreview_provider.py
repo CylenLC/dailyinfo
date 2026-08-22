@@ -9,11 +9,19 @@ briefings by requiring public readers on every returned note.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
+from functools import wraps
 import os
 from pathlib import Path
+import random
+import time
 from typing import Any, Iterable
 
 ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
+DEFAULT_API_CONNECT_TIMEOUT_SECONDS = 10.0
+DEFAULT_API_READ_TIMEOUT_SECONDS = 30.0
+DEFAULT_RATE_LIMIT_RETRIES = 1
+DEFAULT_RATE_LIMIT_MAX_WAIT_SECONDS = 90.0
 
 
 class OpenReviewProviderError(RuntimeError):
@@ -26,6 +34,10 @@ class OpenReviewConfigError(OpenReviewProviderError):
 
 class OpenReviewNotPublic(OpenReviewProviderError):
     """Raised when a venue exists but no public submissions are available."""
+
+
+class OpenReviewRateLimited(OpenReviewProviderError):
+    """Raised when OpenReview remains rate limited after the retry budget."""
 
 
 @dataclass(frozen=True)
@@ -46,6 +58,8 @@ def classify_openreview_error(exc: Exception) -> str:
         return "INVALID_CONFIG"
     if isinstance(exc, OpenReviewNotPublic):
         return "NOT_PUBLIC"
+    if isinstance(exc, OpenReviewRateLimited):
+        return "RATE_LIMITED"
     text = f"{exc.__class__.__name__}: {exc}".casefold()
     if (
         "challenge" in text
@@ -180,7 +194,12 @@ class VenueCapabilities:
 class OpenReviewProvider:
     """Read submissions and replies from one OpenReview API v2 venue."""
 
-    def __init__(self, config: dict, client: Any = None):
+    def __init__(
+        self,
+        config: dict,
+        client: Any = None,
+        authenticated: bool | None = None,
+    ):
         self.config = config
         self.venue_id = str(config.get("venue_id", "")).strip()
         if not self.venue_id:
@@ -195,8 +214,118 @@ class OpenReviewProvider:
             raise OpenReviewConfigError(
                 "public_only=false is not supported by the Discord conference pipeline"
             )
-        self._authenticated = False
+        self._authenticated = bool(authenticated) if authenticated is not None else False
+        self.api_timeout = self._api_timeout()
         self.client = client or self._build_client()
+        if client is not None and authenticated is None:
+            self._authenticated = bool(
+                getattr(client, "_dailyinfo_authenticated", False)
+            )
+
+    def _api_timeout(self) -> tuple[float, float]:
+        """Return the connect/read timeout used for every API request.
+
+        ``requests`` accepts a two-item timeout tuple, which prevents a slow
+        OpenReview socket from waiting forever while still allowing a little
+        more time for the response body than for connection establishment.
+        A single ``api_timeout_seconds`` value remains available as a compact
+        per-source override.
+        """
+
+        default = self.config.get("api_timeout_seconds")
+        connect = self.config.get(
+            "api_connect_timeout_seconds",
+            default if default is not None else DEFAULT_API_CONNECT_TIMEOUT_SECONDS,
+        )
+        read = self.config.get(
+            "api_read_timeout_seconds",
+            default if default is not None else DEFAULT_API_READ_TIMEOUT_SECONDS,
+        )
+        try:
+            connect = float(connect)
+            read = float(read)
+        except (TypeError, ValueError) as exc:
+            raise OpenReviewConfigError(
+                "OpenReview API timeouts must be positive numbers"
+            ) from exc
+        if connect <= 0 or read <= 0:
+            raise OpenReviewConfigError(
+                "OpenReview API timeouts must be positive numbers"
+            )
+        return connect, read
+
+    def _install_api_timeout(self, client: Any) -> None:
+        """Install a default timeout on an openreview-py session.
+
+        openreview-py does not expose a client-wide timeout and its generated
+        methods call ``session.get/post`` directly.  Wrapping the session's
+        ``request`` method covers both login and all subsequent API calls,
+        while preserving any explicit timeout supplied by the client itself.
+        """
+
+        session = getattr(client, "session", None)
+        request = getattr(session, "request", None)
+        if not callable(request) or getattr(session, "_dailyinfo_timeout", False):
+            return
+        timeout = self.api_timeout
+        max_retries = max(
+            0,
+            int(self.config.get("api_rate_limit_retries", DEFAULT_RATE_LIMIT_RETRIES)),
+        )
+        max_wait = max(
+            0.0,
+            float(
+                self.config.get(
+                    "api_rate_limit_max_wait_seconds",
+                    DEFAULT_RATE_LIMIT_MAX_WAIT_SECONDS,
+                )
+            ),
+        )
+
+        def retry_after(response: Any) -> float:
+            headers = getattr(response, "headers", {}) or {}
+            raw = headers.get("Retry-After") or headers.get("retry-after")
+            try:
+                return max(0.0, float(raw))
+            except (TypeError, ValueError):
+                pass
+            try:
+                payload = response.json()
+                reset = ((payload.get("details") or {}).get("resetTime"))
+                if isinstance(reset, (int, float)):
+                    return max(0.0, float(reset) - time.time())
+                if isinstance(reset, str):
+                    value = reset.replace("Z", "+00:00")
+                    return max(
+                        0.0,
+                        datetime.fromisoformat(value).timestamp() - time.time(),
+                    )
+            except (AttributeError, TypeError, ValueError, OverflowError):
+                pass
+            return 0.0
+
+        @wraps(request)
+        def request_with_timeout(method: str, url: str, **kwargs: Any):
+            if kwargs.get("timeout") is None:
+                kwargs["timeout"] = timeout
+            for attempt in range(max_retries + 1):
+                response = request(method, url, **kwargs)
+                if getattr(response, "status_code", None) != 429:
+                    return response
+                if attempt >= max_retries:
+                    return response
+                wait = min(max_wait, retry_after(response))
+                if wait <= 0:
+                    wait = min(max_wait, 1.0 + random.random())
+                close = getattr(response, "close", None)
+                if callable(close):
+                    close()
+                if wait > 0:
+                    time.sleep(wait)
+            raise OpenReviewRateLimited("OpenReview rate limit retry budget exhausted")
+
+        session.request = request_with_timeout
+        session._dailyinfo_timeout = True
 
     def _build_client(self):
         username = _load_env_value("OPENREVIEW_USERNAME")
@@ -214,11 +343,15 @@ class OpenReviewProvider:
                 "openreview-py is not installed; run `uv sync` or `dailyinfo install`"
             ) from exc
 
-        kwargs = {"baseurl": self.baseurl}
+        # Construct without credentials first so the timeout wrapper also
+        # covers the login request made by openreview-py.
+        client = openreview.api.OpenReviewClient(baseurl=self.baseurl)
+        self._install_api_timeout(client)
         if username and password:
-            kwargs.update(username=username, password=password)
+            client.login_user(username, password)
             self._authenticated = True
-        return openreview.api.OpenReviewClient(**kwargs)
+        client._dailyinfo_authenticated = self._authenticated
+        return client
 
     def close(self) -> None:
         """Close any HTTP session owned by openreview-py, when exposed."""
@@ -446,6 +579,37 @@ class OpenReviewProvider:
             "cdate": int(_attr(note, "cdate", 0) or 0),
             "mdate": int(_attr(note, "tmdate", 0) or _attr(note, "mdate", 0) or 0),
         }
+
+class OpenReviewRuntime:
+    """Own one authenticated OpenReview client for a pipeline run."""
+
+    def __init__(self, config: dict):
+        bootstrap = OpenReviewProvider(config)
+        self.client = bootstrap.client
+        self.authenticated = bootstrap._authenticated
+        self._closed = False
+
+    def provider(self, config: dict) -> OpenReviewProvider:
+        if self._closed:
+            raise RuntimeError("OpenReview runtime is closed")
+        return OpenReviewProvider(
+            config,
+            client=self.client,
+            authenticated=self.authenticated,
+        )
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        for owner in (self.client, getattr(self.client, "api_client", None)):
+            for name in ("session", "_session"):
+                session = getattr(owner, name, None)
+                close = getattr(session, "close", None)
+                if callable(close):
+                    close()
+                    self._closed = True
+                    return
+        self._closed = True
 
 
 def invitation_matches(reply: dict, suffixes: Iterable[str]) -> bool:
