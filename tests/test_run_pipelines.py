@@ -1229,3 +1229,46 @@ def test_call_ai_uses_deepseek_primary_openrouter_fallback(monkeypatch):
     assert len(deepseek_calls) == 3, f"expected 3 deepseek attempts, got {call_urls}"
     assert len(openrouter_calls) == 1, f"expected 1 openrouter attempt, got {call_urls}"
     assert "switching to fallback" in "\n".join(logs)
+
+
+def test_call_vision_ai_encodes_png_as_data_url(monkeypatch):
+    import run_pipelines as rp
+
+    captured = {}
+    monkeypatch.setattr(rp, "_get_deepseek_key", lambda: "sk-test-ds")
+
+    def fake_post(url, api_key, model, prompt, max_tokens):
+        captured.update(
+            {
+                "url": url,
+                "api_key": api_key,
+                "model": model,
+                "prompt": prompt,
+                "max_tokens": max_tokens,
+            }
+        )
+        return {
+            "choices": [
+                {
+                    "message": {"content": '{"decisions": []}'},
+                    "finish_reason": "stop",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(rp, "_post_ai", fake_post)
+    assert (
+        rp.call_vision_ai(
+            "classify",
+            [b"png-bytes"],
+            model="deepseek-v4-flash-vision-exp",
+            max_tokens=128,
+        )
+        == '{"decisions": []}'
+    )
+    assert captured["model"] == "deepseek-v4-flash-vision-exp"
+    assert captured["max_tokens"] == 128
+    assert captured["prompt"][1]["type"] == "image_url"
+    assert captured["prompt"][1]["image_url"]["url"].startswith(
+        "data:image/png;base64,"
+    )

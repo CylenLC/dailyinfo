@@ -13,6 +13,7 @@ Usage:
 """
 
 import argparse
+import base64
 import datetime
 import json
 import os
@@ -159,7 +160,13 @@ def _resolve_fallback_model(explicit: str | None) -> str:
     )
 
 
-def _post_ai(url: str, api_key: str, model: str, prompt: str, max_tokens: int):
+def _post_ai(
+    url: str,
+    api_key: str,
+    model: str,
+    prompt: str | list[dict[str, object]],
+    max_tokens: int,
+):
     """Issue a single AI chat completion call and return the parsed JSON."""
     resp = requests.post(
         url,
@@ -264,6 +271,48 @@ def call_ai(
 
     raise BriefingGenerationError(
         f"call_ai: empty response after retries (model={model}, fallback={fallback})"
+    )
+
+
+def call_vision_ai(
+    prompt: str,
+    images: list[bytes],
+    model: str = "deepseek-v4-flash-vision-exp",
+    max_tokens: int = 256,
+) -> str:
+    """Call the DeepSeek vision endpoint for a small set of figure crops."""
+
+    ds_key = _get_deepseek_key()
+    content: list[dict[str, object]] = [{"type": "text", "text": prompt}]
+    for image in images:
+        encoded = base64.b64encode(image).decode("ascii")
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{encoded}"},
+            }
+        )
+    for i in range(3):
+        try:
+            data = _post_ai(
+                DEEPSEEK_API_URL,
+                ds_key,
+                model,
+                content,
+                max_tokens,
+            )
+        except requests.RequestException as exc:
+            log(f"  [call_vision_ai] {model} attempt {i + 1}/3 http_error={exc}")
+            time.sleep(_BACKOFF_SECONDS[min(i, len(_BACKOFF_SECONDS) - 1)])
+            continue
+        choice = (data.get("choices") or [{}])[0]
+        message = choice.get("message") or {}
+        finish_reason = choice.get("finish_reason") or "unknown"
+        response = (message.get("content") or "").strip()
+        if response and finish_reason != "length":
+            return response
+    raise BriefingGenerationError(
+        f"call_vision_ai: empty response after retries (model={model})"
     )
 
 
@@ -1120,6 +1169,7 @@ def run_pipeline_conference() -> int:
                 DATE,
                 force=_is_forced(name),
                 logger=log,
+                call_vision_ai=call_vision_ai,
             )
             saved += result.files_saved
             if result.outcome == "DEGRADED":

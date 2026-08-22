@@ -31,12 +31,13 @@ DEFAULT_ALLOWED_HOSTS = {
 DEFAULT_MAX_PDF_BYTES = 50 * 1024 * 1024
 DEFAULT_MAX_IMAGE_BYTES = 8 * 1024 * 1024
 DEFAULT_TIMEOUT = (10.0, 45.0)
-EXTRACTOR_VERSION = "caption-v3"
+EXTRACTOR_VERSION = "caption-v4"
 
 # The reviewer is deliberately an optional callback.  Keeping the model call
 # outside this module preserves a deterministic caption-only default and makes
 # the extractor easy to test without credentials or network access.
 CaptionReviewer = Callable[[list[dict[str, Any]]], set[int] | None]
+VisionReviewer = Callable[[list[dict[str, Any]]], set[int] | None]
 
 _CAPTION_RE = re.compile(
     r"(?im)^\s*(?:figure|fig(?:ure)?\.?)[ \t]*(?P<number>\d+[a-z]?)\s*[:.\-]"
@@ -80,6 +81,15 @@ _NEGATIVE_TERMS: tuple[tuple[str, int], ...] = (
     ("baseline", 4),
     ("error", 2),
 )
+_NEGATIVE_PHRASES: tuple[tuple[str, int], ...] = (
+    ("system architecture", 8),
+    ("evaluation framework", 8),
+    ("testing framework", 8),
+    ("data pipeline", 6),
+    ("data collection", 5),
+    ("dataset construction", 5),
+    ("benchmark framework", 6),
+)
 
 
 class FigureExtractionError(RuntimeError):
@@ -92,6 +102,7 @@ class FigureDownloadError(FigureExtractionError):
 
 @dataclass(frozen=True)
 class FigureCandidate:
+    entry_index: int
     figure_id: str
     page: int
     caption: str
@@ -293,6 +304,9 @@ def caption_score(caption: str) -> int:
     for term, weight in _NEGATIVE_TERMS:
         if re.search(rf"(?<!\w){re.escape(term)}(?:s)?(?!\w)", text):
             score -= weight
+    for phrase, weight in _NEGATIVE_PHRASES:
+        if phrase in text:
+            score -= weight
     return score
 
 
@@ -462,14 +476,17 @@ def extract_architecture_figure(
     caption_reviewer: CaptionReviewer | None = None,
     review_score_below: int | None = None,
     review_max_candidates: int = 5,
+    vision_reviewer: VisionReviewer | None = None,
 ) -> FigureExtraction:
     """Extract the highest-scoring architecture candidate from PDF bytes.
 
     Caption rules remain the primary path.  If a reviewer callback is supplied,
     only low-confidence rule candidates are sent to it; when no rule candidate
     survives, the callback receives the best few captions as a second chance.
-    A reviewer failure (``None``) falls back to the rules for READY papers and
-    keeps NO_FIGURE papers as NO_FIGURE, so model outages never break a run.
+    Reviewer failures (``None``) fall back to the rules for READY papers and
+    keep NO_FIGURE papers as NO_FIGURE, so model outages never break a run.
+    When enabled, the vision callback receives only rendered low-confidence
+    candidates and can remove a text-approved crop.
     """
 
     if not pdf_bytes.startswith(b"%PDF-"):
@@ -555,7 +572,17 @@ def extract_architecture_figure(
                             item["index"] for item in review_entries
                         }
 
-        for entry in selected_entries:
+        review_indices = {entry["index"] for entry in review_entries}
+        render_entries = list(selected_entries)
+        if vision_reviewer is not None:
+            existing_indices = {entry["index"] for entry in render_entries}
+            render_entries.extend(
+                entry
+                for entry in review_entries
+                if entry["index"] not in existing_indices
+            )
+
+        for entry in render_entries:
             page = document[entry["page_index"]]
             caption = str(entry["caption"])
             caption_bbox = entry["caption_bbox"]
@@ -575,6 +602,7 @@ def extract_architecture_figure(
                 )
                 candidates.append(
                     FigureCandidate(
+                        entry_index=int(entry["index"]),
                         figure_id=figure_id,
                         page=entry["page_index"] + 1,
                         caption=caption,
@@ -586,6 +614,44 @@ def extract_architecture_figure(
                         image_bytes=image_bytes,
                     )
                 )
+
+        if vision_reviewer is not None and review_entries and candidates:
+            by_entry: dict[int, FigureCandidate] = {}
+            for candidate in candidates:
+                if candidate.entry_index not in review_indices:
+                    continue
+                current = by_entry.get(candidate.entry_index)
+                if current is None or (
+                    candidate.has_graphics,
+                    candidate.side == "above",
+                ) > (
+                    current.has_graphics,
+                    current.side == "above",
+                ):
+                    by_entry[candidate.entry_index] = candidate
+            vision_items = [
+                {
+                    "index": entry["index"],
+                    "page": entry["page_index"] + 1,
+                    "score": entry["score"],
+                    "caption": entry["caption"],
+                    "image_bytes": by_entry[entry["index"]].image_bytes,
+                }
+                for entry in review_entries
+                if entry["index"] in by_entry
+            ]
+            try:
+                vision_accepted = vision_reviewer(vision_items)
+            except Exception:
+                vision_accepted = None
+            if vision_accepted is not None:
+                accepted_indices = {int(index) for index in vision_accepted}
+                candidates = [
+                    candidate
+                    for candidate in candidates
+                    if candidate.entry_index not in review_indices
+                    or candidate.entry_index in accepted_indices
+                ]
     finally:
         document.close()
 

@@ -46,6 +46,8 @@ def test_caption_scoring_prefers_architecture_and_rejects_results():
         "Figure 1: Overall framework of our proposed approach evaluated on datasets"
     ) >= 4
     assert caption_score("Figure 2: Ablation performance comparison") < 0
+    assert caption_score("Figure 1: SmartPark system architecture workflow") < 4
+    assert caption_score("Figure 1: Evaluation framework for benchmark testing") < 4
 
 
 def test_normalize_pdf_url_requires_openreview_https():
@@ -162,6 +164,26 @@ def test_high_confidence_caption_skips_reviewer():
 
     assert result.status == "READY"
     assert result.manifest["caption_reviewed"] is False
+
+
+def test_vision_reviewer_can_reject_text_reviewer_candidate():
+    seen = []
+
+    def text_reviewer(captions):
+        return {captions[0]["index"]}
+
+    def vision_reviewer(items):
+        seen.extend(items)
+        return set()
+
+    result = extract_architecture_figure(
+        _pdf_with_architecture_caption("Figure 1: Proposed decoder."),
+        caption_reviewer=text_reviewer,
+        vision_reviewer=vision_reviewer,
+    )
+
+    assert result.status == "NO_FIGURE"
+    assert seen and seen[0]["image_bytes"].startswith(b"\x89PNG")
 
 
 def test_download_pdf_checks_magic_and_size(monkeypatch):

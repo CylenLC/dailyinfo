@@ -176,6 +176,63 @@ def test_figure_caption_review_isolated_and_parses_indices():
     assert "不可信数据" in calls[0][0]
 
 
+def test_figure_caption_review_multiclass_rejects_negative_categories():
+    from conference import _review_figure_captions
+
+    calls = []
+
+    def fake_ai(prompt, model="stub", max_tokens=0):
+        calls.append(prompt)
+        return (
+            '{"decisions": ['
+            '{"index": 2, "label": "METHOD_PIPELINE", "confidence": 0.92}, '
+            '{"index": 4, "label": "DATA_PIPELINE", "confidence": 0.99}, '
+            '{"index": 6, "label": "SYSTEM_ARCHITECTURE", "confidence": 0.99}'
+            ']}'
+        )
+
+    accepted = _review_figure_captions(
+        [
+            {"index": 2, "score": 3, "page": 2, "caption": "Figure 1: proposed method"},
+            {"index": 4, "score": 3, "page": 4, "caption": "Figure 2: data pipeline"},
+            {"index": 6, "score": 3, "page": 6, "caption": "Figure 3: system architecture"},
+        ],
+        fake_ai,
+        model="deepseek-chat",
+        max_tokens=256,
+        context={"title": "Example model", "abstract": "A proposed encoder and decoder."},
+    )
+
+    assert accepted == {2}
+    assert "Example model" in calls[0]
+    assert "MODEL_ARCHITECTURE" in calls[0]
+    assert "EVALUATION_FRAMEWORK" in calls[0]
+
+
+def test_figure_vision_review_accepts_only_model_or_method():
+    from conference import _review_figure_images
+
+    def fake_vision(prompt, images, model="stub", max_tokens=0):
+        assert "论文标题" in prompt
+        assert len(images) == 1
+        if "Figure 1" in prompt:
+            return '{"decisions": [{"index": 2, "label": "MODEL_ARCHITECTURE", "confidence": 0.9}]}'
+        return '{"decisions": [{"index": 4, "label": "DATA_PIPELINE", "confidence": 0.99}]}'
+
+    accepted = _review_figure_images(
+        [
+            {"index": 2, "page": 2, "caption": "Figure 1: model", "image_bytes": b"a"},
+            {"index": 4, "page": 4, "caption": "Figure 2: data", "image_bytes": b"b"},
+        ],
+        fake_vision,
+        model="deepseek-v4-flash-vision-exp",
+        max_tokens=256,
+        context={"title": "Example", "abstract": "A model."},
+    )
+
+    assert accepted == {2}
+
+
 def test_figure_caption_review_returns_none_on_model_failure():
     from conference import _review_figure_captions
 
