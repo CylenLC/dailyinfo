@@ -54,6 +54,8 @@ class SubmissionPage:
 def classify_openreview_error(exc: Exception) -> str:
     """Map client/network exceptions to a stable source outcome."""
 
+    if exc.__class__.__name__ in {"WebConferenceNotReady", "SourceNotReady"}:
+        return "SOURCE_NOT_READY"
     if isinstance(exc, OpenReviewConfigError):
         return "INVALID_CONFIG"
     if isinstance(exc, OpenReviewNotPublic):
@@ -547,6 +549,7 @@ class OpenReviewProvider:
             "id": note_id,
             "note_id": note_id,
             "forum_id": forum_id,
+            "source_provider": "openreview",
             "number": _attr(note, "number", None),
             "title": str(content_value(content, "title", "") or "").strip(),
             "abstract": str(content_value(content, "abstract", "") or "").strip(),
@@ -556,6 +559,7 @@ class OpenReviewProvider:
             "venue_id": venue_id,
             "status": status,
             "pdf": _absolute_openreview_url(raw_pdf),
+            "landing_url": f"https://openreview.net/forum?id={forum_id}",
             # Keep the Note field as supplied.  OpenReview uses both relative
             # attachment paths and absolute URLs across venues/revisions.
             "pdf_field": raw_pdf,

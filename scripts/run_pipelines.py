@@ -1144,7 +1144,7 @@ def run_pipeline_resource() -> int:
 
 
 # =====================================================================
-# PIPELINE 6: OpenReview Conference Papers
+# PIPELINE 6: Conference Papers
 # =====================================================================
 def run_pipeline_conference() -> int:
     global CONFERENCE_RUN_FAILED
@@ -1158,24 +1158,30 @@ def run_pipeline_conference() -> int:
     runtime_init_error: Exception | None = None
     for source_cfg in sources:
         source_cfg = _resolve_conference_source(source_cfg, defaults)
-        if source_cfg.get("provider") != "openreview":
-            log(f"  {source_cfg.get('name', '?')}: unsupported conference provider")
+        provider_kind = str(source_cfg.get("provider") or "").casefold()
+        if provider_kind not in {"openreview", "acl", "cvf", "dblp", "neurips"}:
+            log(
+                f"  {source_cfg.get('name', '?')}: unsupported conference provider "
+                f"{provider_kind or '<empty>'}"
+            )
             CONFERENCE_RUN_FAILED = True
             continue
         name = source_cfg["name"]
         log(f"  {name}...")
         try:
-            if runtime is None:
-                if runtime_init_error is not None:
-                    raise runtime_init_error
-                log("  [OpenReview] creating shared authenticated runtime")
-                try:
-                    runtime = OpenReviewRuntime(source_cfg)
-                except Exception as exc:
-                    runtime_init_error = exc
-                    raise
-                log("  [OpenReview] shared runtime ready")
-            provider = runtime.provider(source_cfg)
+            provider = None
+            if provider_kind == "openreview":
+                if runtime is None:
+                    if runtime_init_error is not None:
+                        raise runtime_init_error
+                    log("  [OpenReview] creating shared authenticated runtime")
+                    try:
+                        runtime = OpenReviewRuntime(source_cfg)
+                    except Exception as exc:
+                        runtime_init_error = exc
+                        raise
+                    log("  [OpenReview] shared runtime ready")
+                provider = runtime.provider(source_cfg)
             result = run_conference_source(
                 source_cfg,
                 defaults,

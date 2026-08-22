@@ -27,6 +27,11 @@ DEFAULT_ALLOWED_HOSTS = {
     # Some OpenReview Notes store a public arXiv mirror in the pdf field.
     "arxiv.org",
     "export.arxiv.org",
+    # Public proceedings hosts used by the non-OpenReview providers.
+    "aclanthology.org",
+    "www.aclanthology.org",
+    "openaccess.thecvf.com",
+    "papers.nips.cc",
 }
 DEFAULT_MAX_PDF_BYTES = 50 * 1024 * 1024
 DEFAULT_MAX_IMAGE_BYTES = 8 * 1024 * 1024
@@ -148,7 +153,7 @@ def normalize_pdf_url(
         raw = f"https://openreview.net{raw}"
     parsed = urlparse(raw)
     if parsed.scheme != "https" or not _host_allowed(parsed.hostname or "", allowed_hosts):
-        raise FigureDownloadError(f"unsupported OpenReview PDF URL: {raw!r}")
+        raise FigureDownloadError(f"unsupported PDF URL: {raw!r}")
     return raw
 
 
@@ -176,7 +181,9 @@ def pdf_url_candidates(
 
     if raw:
         add(normalize_pdf_url(raw, note_id=note_id, allowed_hosts=allowed_hosts))
-    if note_id:
+    raw_host = (urlparse(raw).hostname or "").casefold() if raw else ""
+    openreview_raw = raw_host in {"openreview.net", "api2.openreview.net"}
+    if note_id and (not raw or openreview_raw):
         # The API attachment endpoint is the canonical openreview-py fallback.
         add(
             "https://api2.openreview.net/attachment?"

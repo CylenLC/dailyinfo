@@ -107,6 +107,56 @@ def test_pipeline_conference_reuses_one_openreview_runtime(monkeypatch):
     ]
 
 
+def test_pipeline_conference_accepts_acl_and_cvf_without_openreview_runtime(monkeypatch):
+    import run_pipelines as rp
+    from conference import ConferenceRunResult
+
+    sources = [
+        {
+            "name": "acl_anthology_acl_2026",
+            "display_name": "ACL 2026",
+            "category": "conference",
+            "type": "api",
+            "provider": "acl",
+            "venue_id": "ACL2026",
+            "url": "https://aclanthology.org/events/acl-2026/",
+            "enabled": True,
+        },
+        {
+            "name": "cvf_cvpr_2026",
+            "display_name": "CVPR 2026",
+            "category": "conference",
+            "type": "api",
+            "provider": "cvf",
+            "venue_id": "CVPR2026",
+            "url": "https://openaccess.thecvf.com/CVPR2026?day=all",
+            "enabled": True,
+        },
+    ]
+    calls = []
+
+    monkeypatch.setattr(rp, "_load_sources", lambda: ({"sources": sources}, {}, {}))
+    monkeypatch.setattr(rp, "FORCE_SOURCES", set())
+    monkeypatch.setattr(rp, "FORCE_ALL", False)
+    monkeypatch.setattr(rp, "SOURCE_FILTER", set())
+    monkeypatch.setattr(
+        rp,
+        "run_conference_source",
+        lambda config, *_args, provider=None, **_kwargs: (
+            calls.append((config["provider"], provider))
+            or ConferenceRunResult(config["name"], "SUCCESS")
+        ),
+    )
+    monkeypatch.setattr(
+        rp,
+        "OpenReviewRuntime",
+        lambda *_args, **_kwargs: pytest.fail("web sources must not initialize OpenReview"),
+    )
+
+    assert rp.run_pipeline_conference() == 0
+    assert calls == [("acl", None), ("cvf", None)]
+
+
 def test_already_pushed_within_detects_recent_file():
     import run_pipelines as rp
     from paths import PUSHED_DIR

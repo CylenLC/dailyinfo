@@ -33,11 +33,45 @@ def test_openreview_registry_covers_requested_conferences():
         "openreview_naacl_2025": "aclweb.org/NAACL/2025/Conference",
     }
     assert {name: sources[name]["venue_id"] for name in expected} == expected
-    assert all(sources[name]["enabled"] for name in expected)
+    assert all(
+        sources[name]["enabled"]
+        for name in expected
+        if name in {
+            "openreview_iclr_2026",
+            "openreview_icml_2026",
+            "openreview_neurips_2026",
+            "openreview_aaai_2026",
+            "openreview_kdd_2026",
+            "openreview_kdd_2026_cycle2",
+        }
+    )
     assert all(
         sources[name]["url"].startswith("https://openreview.net/")
         for name in expected
     )
+
+
+def test_acl_and_cvf_are_canonical_for_public_proceedings():
+    config = json.loads(
+        (REPO_ROOT / "config" / "sources.json").read_text(encoding="utf-8")
+    )
+    sources = {source["name"]: source for source in config["sources"]}
+    assert sources["acl_anthology_acl_2026"]["provider"] == "acl"
+    assert sources["acl_anthology_acl_2026"]["url"].startswith(
+        "https://aclanthology.org/"
+    )
+    assert sources["cvf_cvpr_2026"]["provider"] == "cvf"
+    assert sources["cvf_cvpr_2026"]["url"].startswith(
+        "https://openaccess.thecvf.com/"
+    )
+    for name in (
+        "openreview_cvpr_2026",
+        "openreview_acl_2026",
+        "openreview_emnlp_2026",
+        "openreview_iccv_2025",
+        "openreview_naacl_2025",
+    ):
+        assert sources[name]["enabled"] is False
 
 
 def test_conference_source_inherits_shared_profile():

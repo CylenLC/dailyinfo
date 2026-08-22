@@ -66,6 +66,13 @@ def test_pdf_url_candidates_include_attachment_api_fallback():
     assert "https://api2.openreview.net/pdf?id=note-1" in candidates
 
 
+def test_pdf_url_candidates_do_not_turn_acl_pdf_into_openreview_fallback():
+    candidates = pdf_url_candidates(
+        "https://aclanthology.org/2026.acl-long.1.pdf", note_id="acl:paper"
+    )
+    assert candidates == ["https://aclanthology.org/2026.acl-long.1.pdf"]
+
+
 def test_download_pdf_falls_back_after_web_challenge(monkeypatch):
     calls = []
 
