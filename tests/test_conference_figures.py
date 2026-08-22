@@ -121,6 +121,49 @@ def test_extract_returns_no_figure_for_result_caption():
     assert result.image_bytes is None
 
 
+def test_caption_reviewer_rescues_low_score_caption():
+    reviewed = []
+
+    def reviewer(captions):
+        reviewed.append(captions)
+        return {captions[0]["index"]}
+
+    result = extract_architecture_figure(
+        _pdf_with_architecture_caption("Figure 1: Proposed decoder."),
+        caption_reviewer=reviewer,
+        review_score_below=7,
+    )
+
+    assert result.status == "READY"
+    assert result.manifest["caption_reviewed"] is True
+    assert len(reviewed) == 1
+    assert reviewed[0][0]["score"] < 4
+
+
+def test_caption_reviewer_rejects_low_score_false_positive():
+    result = extract_architecture_figure(
+        _pdf_with_architecture_caption("Figure 1: Proposed decoder."),
+        caption_reviewer=lambda _captions: set(),
+    )
+
+    assert result.status == "NO_FIGURE"
+    assert result.manifest["review_attempted"] is True
+
+
+def test_high_confidence_caption_skips_reviewer():
+    def reviewer(_captions):
+        raise AssertionError("high-confidence captions must not call the model")
+
+    result = extract_architecture_figure(
+        _pdf_with_architecture_caption(),
+        caption_reviewer=reviewer,
+        review_score_below=7,
+    )
+
+    assert result.status == "READY"
+    assert result.manifest["caption_reviewed"] is False
+
+
 def test_download_pdf_checks_magic_and_size(monkeypatch):
     class Response:
         url = "https://openreview.net/pdf?id=abc"

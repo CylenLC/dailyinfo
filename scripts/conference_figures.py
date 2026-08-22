@@ -3,8 +3,8 @@
 This module intentionally stays small and deterministic.  It is a display
 enrichment for Pipeline 6, not a general-purpose PDF library: the caller
 downloads a public PDF, passes its bytes here, and keeps only the derived
-figure/manifest.  Caption scoring is deliberately lexical so the first
-version does not add another model call to the conference pipeline.
+figure/manifest. Caption scoring is lexical by default; an optional callback
+can review only low-confidence captions without changing the default path.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import json
 import re
 from pathlib import Path
 import time
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 from urllib.parse import urlencode, urlparse
 
 import requests
@@ -31,7 +31,12 @@ DEFAULT_ALLOWED_HOSTS = {
 DEFAULT_MAX_PDF_BYTES = 50 * 1024 * 1024
 DEFAULT_MAX_IMAGE_BYTES = 8 * 1024 * 1024
 DEFAULT_TIMEOUT = (10.0, 45.0)
-EXTRACTOR_VERSION = "caption-v2"
+EXTRACTOR_VERSION = "caption-v3"
+
+# The reviewer is deliberately an optional callback.  Keeping the model call
+# outside this module preserves a deterministic caption-only default and makes
+# the extractor easy to test without credentials or network access.
+CaptionReviewer = Callable[[list[dict[str, Any]]], set[int] | None]
 
 _CAPTION_RE = re.compile(
     r"(?im)^\s*(?:figure|fig(?:ure)?\.?)[ \t]*(?P<number>\d+[a-z]?)\s*[:.\-]"
@@ -454,8 +459,18 @@ def extract_architecture_figure(
     min_score: int = 4,
     max_image_bytes: int = DEFAULT_MAX_IMAGE_BYTES,
     extractor_version: str = EXTRACTOR_VERSION,
+    caption_reviewer: CaptionReviewer | None = None,
+    review_score_below: int | None = None,
+    review_max_candidates: int = 5,
 ) -> FigureExtraction:
-    """Extract the highest-scoring architecture candidate from PDF bytes."""
+    """Extract the highest-scoring architecture candidate from PDF bytes.
+
+    Caption rules remain the primary path.  If a reviewer callback is supplied,
+    only low-confidence rule candidates are sent to it; when no rule candidate
+    survives, the callback receives the best few captions as a second chance.
+    A reviewer failure (``None``) falls back to the rules for READY papers and
+    keeps NO_FIGURE papers as NO_FIGURE, so model outages never break a run.
+    """
 
     if not pdf_bytes.startswith(b"%PDF-"):
         raise FigureExtractionError("input is not a PDF")
@@ -466,6 +481,7 @@ def extract_architecture_figure(
         raise FigureExtractionError(f"cannot open PDF: {exc}") from exc
 
     candidates: list[FigureCandidate] = []
+    caption_entries: list[dict[str, Any]] = []
     try:
         for page_index in range(min(len(document), max_pages)):
             page = document[page_index]
@@ -479,32 +495,97 @@ def extract_architecture_figure(
                     continue
                 caption = re.sub(r"\s+", " ", text).strip()
                 score = caption_score(caption)
-                if score < min_score:
-                    continue
                 caption_bbox = tuple(float(value) for value in block[:4])
-                for side in ("above", "below"):
-                    window = _candidate_window(
-                        page, caption_bbox, side, caption_text=caption
+                caption_entries.append(
+                    {
+                        "index": len(caption_entries),
+                        "page_index": page_index,
+                        "figure_id": f"fig{match.group('number')}",
+                        "caption": caption,
+                        "caption_bbox": caption_bbox,
+                        "score": score,
+                    }
+                )
+
+        rule_entries = [
+            entry for entry in caption_entries if entry["score"] >= min_score
+        ]
+        selected_entries = list(rule_entries)
+        review_entries: list[dict[str, Any]] = []
+        if caption_reviewer is not None:
+            score_cutoff = (
+                review_score_below
+                if review_score_below is not None
+                else min_score + 3
+            )
+            if rule_entries:
+                review_entries = sorted(
+                    (entry for entry in rule_entries if entry["score"] < score_cutoff),
+                    key=lambda entry: (-entry["score"], entry["index"]),
+                )[: max(1, int(review_max_candidates))]
+            else:
+                review_entries = sorted(
+                    caption_entries,
+                    key=lambda entry: (-entry["score"], entry["index"]),
+                )[: max(1, int(review_max_candidates))]
+            if review_entries:
+                try:
+                    accepted = caption_reviewer(review_entries)
+                except Exception:
+                    accepted = None
+                if accepted is not None:
+                    accepted_indices = set(int(index) for index in accepted)
+                    if rule_entries:
+                        # High-confidence rule hits do not need model review;
+                        # low-confidence hits must be accepted by the reviewer.
+                        selected_entries = [
+                            entry
+                            for entry in rule_entries
+                            if entry["score"] >= score_cutoff
+                            or entry["index"] in accepted_indices
+                        ]
+                    else:
+                        selected_entries = [
+                            entry
+                            for entry in caption_entries
+                            if entry["index"] in accepted_indices
+                        ]
+                    for entry in selected_entries:
+                        entry["caption_reviewed"] = entry["index"] in {
+                            item["index"] for item in review_entries
+                        }
+
+        for entry in selected_entries:
+            page = document[entry["page_index"]]
+            caption = str(entry["caption"])
+            caption_bbox = entry["caption_bbox"]
+            score = int(entry["score"])
+            figure_id = str(entry["figure_id"])
+            for side in ("above", "below"):
+                window = _candidate_window(
+                    page, caption_bbox, side, caption_text=caption
+                )
+                clip, has_graphics = _tighten_to_graphics(
+                    page, window, side, caption_bbox
+                )
+                if clip.width < 30 or clip.height < 30:
+                    continue
+                image_bytes, _actual_dpi = _render(
+                    page, clip, render_dpi, max_image_bytes
+                )
+                candidates.append(
+                    FigureCandidate(
+                        figure_id=figure_id,
+                        page=entry["page_index"] + 1,
+                        caption=caption,
+                        caption_bbox=caption_bbox,
+                        bbox=_clip_tuple(clip),
+                        score=score,
+                        side=side,
+                        has_graphics=has_graphics,
+                        image_bytes=image_bytes,
                     )
-                    clip, has_graphics = _tighten_to_graphics(
-                        page, window, side, caption_bbox
-                    )
-                    if clip.width < 30 or clip.height < 30:
-                        continue
-                    image_bytes, _actual_dpi = _render(page, clip, render_dpi, max_image_bytes)
-                    candidates.append(
-                        FigureCandidate(
-                            figure_id=f"fig{match.group('number')}",
-                            page=page_index + 1,
-                            caption=caption,
-                            caption_bbox=caption_bbox,
-                            bbox=_clip_tuple(clip),
-                            score=score,
-                            side=side,
-                            has_graphics=has_graphics,
-                            image_bytes=image_bytes,
-                        )
-                    )
+                )
     finally:
         document.close()
 
@@ -515,6 +596,8 @@ def extract_architecture_figure(
                 "status": "NO_FIGURE",
                 "extractor_version": extractor_version,
                 "reason": "no architecture-like caption met the score threshold",
+                "caption_count": len(caption_entries),
+                "review_attempted": bool(review_entries),
             },
         )
 
@@ -542,6 +625,13 @@ def extract_architecture_figure(
             "score": selected.score,
             "side": selected.side,
             "candidate_count": len(candidates),
+            "caption_reviewed": bool(
+                caption_reviewer is not None
+                and selected.caption in {
+                    str(entry["caption"])
+                    for entry in review_entries
+                }
+            ),
         },
     )
 

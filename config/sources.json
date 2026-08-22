@@ -39,7 +39,14 @@
         "max_pages": 15,
         "render_dpi": 360,
         "min_caption_score": 4,
-        "extractor_version": "caption-v2",
+        "extractor_version": "caption-v3",
+        "caption_review": {
+          "enabled": true,
+          "model": "deepseek-chat",
+          "low_confidence_score": 7,
+          "max_candidates": 5,
+          "max_tokens": 256
+        },
         "max_attempts": 2,
         "refresh_batch_size": 1000
       }

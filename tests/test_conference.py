@@ -152,6 +152,44 @@ def test_briefing_prompt_requests_raw_ratings_without_internal_disclaimer():
     assert "不要输出“为什么值得关注”" in prompt
 
 
+def test_figure_caption_review_isolated_and_parses_indices():
+    from conference import _review_figure_captions
+
+    calls = []
+
+    def fake_ai(prompt, model="stub", max_tokens=0):
+        calls.append((prompt, model, max_tokens))
+        return '```json\n{"accepted_indices": [2, 99]}\n```'
+
+    accepted = _review_figure_captions(
+        [
+            {"index": 2, "score": 3, "page": 2, "caption": "Figure 1: decoder"},
+            {"index": 4, "score": 1, "page": 4, "caption": "Figure 2: results"},
+        ],
+        fake_ai,
+        model="deepseek-v4-pro",
+        max_tokens=800,
+    )
+
+    assert accepted == {2}
+    assert calls[0][1:] == ("deepseek-v4-pro", 800)
+    assert "不可信数据" in calls[0][0]
+
+
+def test_figure_caption_review_returns_none_on_model_failure():
+    from conference import _review_figure_captions
+
+    def failing_ai(*_args, **_kwargs):
+        raise RuntimeError("timeout")
+
+    assert _review_figure_captions(
+        [{"index": 0, "score": 1, "caption": "Figure 1: results"}],
+        failing_ai,
+        model="deepseek-v4-pro",
+        max_tokens=800,
+    ) is None
+
+
 def test_clean_conference_briefing_removes_internal_boilerplate():
     from conference import _clean_conference_briefing
 
