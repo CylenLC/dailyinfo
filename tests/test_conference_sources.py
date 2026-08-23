@@ -40,9 +40,15 @@ def test_openreview_registry_covers_requested_conferences():
             "openreview_iclr_2026",
             "openreview_icml_2026",
             "openreview_neurips_2026",
-            "openreview_aaai_2026",
-            "openreview_kdd_2026",
-            "openreview_kdd_2026_cycle2",
+        }
+    )
+    assert all(
+        not sources[name]["enabled"]
+        for name in expected
+        if name not in {
+            "openreview_iclr_2026",
+            "openreview_icml_2026",
+            "openreview_neurips_2026",
         }
     )
     assert all(

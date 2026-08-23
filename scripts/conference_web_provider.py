@@ -24,6 +24,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from openreview_provider import SubmissionPage, VenueCapabilities
+from paper_metadata import extract_affiliations_from_html, extract_affiliations_from_pdf
 
 
 class WebConferenceProviderError(RuntimeError):
@@ -217,6 +218,8 @@ class WebConferenceProvider:
         self._papers: dict[str, dict] = {}
         self._memory_cache: dict[str, str] = {}
         self._code_url_cache: dict[str, str] = {}
+        self._affiliations_cache: dict[str, list[str]] = {}
+        self._affiliation_source_cache: dict[str, str] = {}
         self._pdf_bytes_cache: dict[str, bytes] = {}
 
     @property
@@ -426,6 +429,71 @@ class WebConferenceProvider:
             paper["code_url"] = code_url
         return paper
 
+    def _paper_affiliations(
+        self, paper: dict, *, detail_html: str | None = None
+    ) -> list[str]:
+        """Resolve affiliations from detail HTML, then the PDF first pages."""
+
+        cache_key = str(paper.get("landing_url") or paper.get("forum_id") or "")
+        if cache_key in self._affiliations_cache:
+            return self._affiliations_cache[cache_key]
+        affiliations = extract_affiliations_from_html(detail_html or "")
+        source = "detail_page" if affiliations else "missing"
+        if not affiliations and paper.get("landing_url"):
+            try:
+                detail_html = detail_html or self._get_text(
+                    str(paper["landing_url"]), detail=True
+                )
+                affiliations = extract_affiliations_from_html(detail_html)
+                if affiliations:
+                    source = "detail_page"
+            except Exception:
+                pass
+        if not affiliations:
+            pdf_url = str(paper.get("pdf") or paper.get("pdf_field") or "")
+            if pdf_url:
+                try:
+                    from conference_figures import DEFAULT_ALLOWED_HOSTS, download_pdf
+
+                    figure_cfg = self.config.get("figures", {}) or {}
+                    pdf_bytes = self._pdf_bytes_cache.get(pdf_url)
+                    if pdf_bytes is None:
+                        pdf_bytes = download_pdf(
+                            pdf_url,
+                            note_id="",
+                            session=self.session,
+                            max_bytes=int(figure_cfg.get("max_pdf_mb", 50)) * 1024 * 1024,
+                            timeout=(
+                                self.options.connect_timeout,
+                                self.options.read_timeout,
+                            ),
+                            allowed_hosts=figure_cfg.get("allowed_hosts")
+                            or DEFAULT_ALLOWED_HOSTS,
+                        )
+                        self._pdf_bytes_cache[pdf_url] = pdf_bytes
+                    affiliations = extract_affiliations_from_pdf(pdf_bytes)
+                    if affiliations:
+                        source = "pdf"
+                except Exception:
+                    pass
+        self._affiliations_cache[cache_key] = affiliations
+        self._affiliation_source_cache[cache_key] = source
+        return affiliations
+
+    def _enrich_paper_affiliations(
+        self, paper: dict | None, *, detail_html: str | None = None
+    ) -> dict | None:
+        if paper is None:
+            return paper
+        paper["affiliations"] = self._paper_affiliations(
+            paper, detail_html=detail_html
+        )
+        cache_key = str(paper.get("landing_url") or paper.get("forum_id") or "")
+        paper["affiliation_source"] = self._affiliation_source_cache.get(
+            cache_key, "missing"
+        )
+        return paper
+
     def fetch_forum(
         self, forum_id: str, _capabilities: VenueCapabilities
     ) -> tuple[dict | None, list[dict]]:
@@ -434,7 +502,8 @@ class WebConferenceProvider:
         # OpenReview reviews/rebuttals. Returning an empty reply list lets the
         # existing snapshot/event machinery retain its review-neutral fields.
         paper = self._papers.get(str(forum_id))
-        return self._enrich_paper_code_url(paper), []
+        self._enrich_paper_code_url(paper)
+        return self._enrich_paper_affiliations(paper), []
 
 
 class ACLAnthologyProvider(WebConferenceProvider):
@@ -497,6 +566,7 @@ class ACLAnthologyProvider(WebConferenceProvider):
                     "title": _text(anchor),
                     "abstract": abstract,
                     "authors": authors,
+                    "affiliations": [],
                     "keywords": [],
                     "venue": str(self.config.get("display_name") or ""),
                     "venue_id": str(self.config.get("venue_id") or ""),
@@ -600,6 +670,7 @@ class CVFOpenAccessProvider(WebConferenceProvider):
                     "title": title,
                     "abstract": _text(detail.find(id="abstract")),
                     "authors": list(dict.fromkeys(authors)),
+                    "affiliations": [],
                     "keywords": [],
                     "venue": str(self.config.get("display_name") or ""),
                     "venue_id": str(self.config.get("venue_id") or ""),
@@ -631,7 +702,7 @@ class CVFOpenAccessProvider(WebConferenceProvider):
             soup, str(paper.get("landing_url") or ""), fallback_pdf
         )
         self._enrich_paper_code_url(paper, detail_html=html)
-        return paper, []
+        return self._enrich_paper_affiliations(paper, detail_html=html), []
 
 
 class DBLPProvider(WebConferenceProvider):
@@ -698,6 +769,7 @@ class DBLPProvider(WebConferenceProvider):
                     "title": title,
                     "abstract": "",
                     "authors": list(dict.fromkeys(authors)),
+                    "affiliations": [],
                     "keywords": [],
                     "venue": str(self.config.get("display_name") or ""),
                     "venue_id": str(self.config.get("venue_id") or ""),
@@ -746,6 +818,7 @@ class DBLPProvider(WebConferenceProvider):
                     pass
         if paper:
             self._enrich_paper_code_url(paper)
+            self._enrich_paper_affiliations(paper)
         return paper, []
 
 
@@ -780,6 +853,7 @@ class NeurIPSProceedingsProvider(WebConferenceProvider):
                     "title": _text(anchor),
                     "abstract": "",
                     "authors": authors,
+                    "affiliations": [],
                     "keywords": [],
                     "venue": str(self.config.get("display_name") or ""),
                     "venue_id": str(self.config.get("venue_id") or ""),
@@ -814,8 +888,10 @@ class NeurIPSProceedingsProvider(WebConferenceProvider):
             if pdf:
                 paper["pdf"] = paper["pdf_field"] = pdf
             self._enrich_paper_code_url(paper, detail_html=html)
+            self._enrich_paper_affiliations(paper, detail_html=html)
         elif paper:
             self._enrich_paper_code_url(paper)
+            self._enrich_paper_affiliations(paper)
         return paper, []
 
 

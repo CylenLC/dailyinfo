@@ -463,6 +463,8 @@ def build_snapshot(
             "title",
             "abstract",
             "authors",
+            "affiliations",
+            "affiliation_source",
             "keywords",
             "venue",
             "venue_id",
@@ -510,6 +512,7 @@ def build_snapshot(
             "title",
             "abstract",
             "authors",
+            "affiliations",
             "keywords",
             "pdf",
             "pdf_field",
@@ -1517,7 +1520,7 @@ def _briefing_prompt(source: str, display_name: str, events: list[dict]) -> str:
 
 要求：
 {title_requirement}
-{metadata_requirements}paper.code_url 非空时必须输出“Link To Code”；链接必须使用输入值。
+{metadata_requirements}paper.code_url 非空时必须输出“Link To Code”；链接必须使用输入值。paper.affiliations 非空时输出“研究机构”，按输入顺序列出；不要猜测缺失机构。
 3. 每篇论文只用一段话直接介绍研究内容、方法和主要结果；不要输出“为什么值得关注”或类似栏目。DeepSeek 只负责本简报的总结，不参与论文相关度筛选。
 {review_requirements}
 9. 不要输出事件类型、PAPER_DISCOVERED、before/after、输入元数据、数据来源说明、免责声明或内部处理过程；不要添加“以下 N 篇论文……”之类的统一前言或结尾。

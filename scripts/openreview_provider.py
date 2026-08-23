@@ -17,6 +17,10 @@ import random
 import time
 from typing import Any, Iterable
 
+import requests
+
+from paper_metadata import extract_affiliations_from_pdf
+
 ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 DEFAULT_API_CONNECT_TIMEOUT_SECONDS = 10.0
 DEFAULT_API_READ_TIMEOUT_SECONDS = 30.0
@@ -219,6 +223,7 @@ class OpenReviewProvider:
         self._authenticated = bool(authenticated) if authenticated is not None else False
         self.api_timeout = self._api_timeout()
         self.client = client or self._build_client()
+        self._pdf_bytes_cache: dict[str, bytes] = {}
         if client is not None and authenticated is None:
             self._authenticated = bool(
                 getattr(client, "_dailyinfo_authenticated", False)
@@ -517,12 +522,42 @@ class OpenReviewProvider:
         submission = (
             self.normalize_submission(root, capabilities) if root is not None else None
         )
+        self._enrich_submission_affiliations(submission)
         replies = [
             self.normalize_reply(note)
             for note in visible
             if _attr(note, "id", "") != forum_id and note is not root
         ]
         return submission, replies
+
+    def _enrich_submission_affiliations(self, submission: dict | None) -> None:
+        """Use explicit Note fields, then the first PDF pages as a fallback."""
+
+        if not submission or submission.get("affiliations"):
+            return
+        pdf_url = str(submission.get("pdf") or "").strip()
+        if not pdf_url:
+            return
+        try:
+            from conference_figures import DEFAULT_ALLOWED_HOSTS, download_pdf
+
+            session = getattr(self.client, "session", None) or requests
+            pdf_bytes = self._pdf_bytes_cache.get(pdf_url)
+            if pdf_bytes is None:
+                pdf_bytes = download_pdf(
+                    pdf_url,
+                    note_id=str(submission.get("forum_id") or ""),
+                    session=session,
+                    timeout=self.api_timeout,
+                    allowed_hosts=DEFAULT_ALLOWED_HOSTS,
+                )
+                self._pdf_bytes_cache[pdf_url] = pdf_bytes
+            affiliations = extract_affiliations_from_pdf(pdf_bytes)
+        except Exception:
+            affiliations = []
+        if affiliations:
+            submission["affiliations"] = affiliations
+            submission["affiliation_source"] = "pdf"
 
     def normalize_submission(self, note: Any, capabilities: VenueCapabilities) -> dict:
         content = public_content(note, enforce=self._authenticated and self.public_only)
@@ -542,6 +577,20 @@ class OpenReviewProvider:
             status = "under_review"
 
         authors = content_value(content, "authors", [])
+        affiliations = []
+        affiliation_source = "missing"
+        for field_name in (
+            "affiliations",
+            "author_affiliations",
+            "authoraffiliations",
+            "institutions",
+        ):
+            candidate = content_value(content, field_name, [])
+            if candidate:
+                affiliations = [str(value) for value in _as_list(candidate) if str(value).strip()]
+                if affiliations:
+                    affiliation_source = "note"
+                    break
         keywords = content_value(content, "keywords", [])
         raw_pdf = str(content_value(content, "pdf", "") or "").strip()
         invitations = _as_list(_attr(note, "invitations", []))
@@ -554,6 +603,8 @@ class OpenReviewProvider:
             "title": str(content_value(content, "title", "") or "").strip(),
             "abstract": str(content_value(content, "abstract", "") or "").strip(),
             "authors": [str(x) for x in _as_list(authors)],
+            "affiliations": affiliations,
+            "affiliation_source": affiliation_source,
             "keywords": [str(x) for x in _as_list(keywords)],
             "venue": str(content_value(content, "venue", "") or ""),
             "venue_id": venue_id,
