@@ -28,14 +28,20 @@ uv sync --python python3 && uv pip install -e .
 dailyinfo install                # Validate .env + create workspace dirs + install deps
 
 # Run pipelines (idempotent - skips sources with today's briefing)
-dailyinfo run                    # All 5 pipelines
+dailyinfo run                    # All 7 pipelines
 dailyinfo run -p 1               # Pipeline 1: papers
 dailyinfo run -p 2               # Pipeline 2: AI news
 dailyinfo run -p 3               # Pipeline 3: arXiv
 dailyinfo run -p 4               # Pipeline 4: code trending
 dailyinfo run -p 5               # Pipeline 5: university news
+dailyinfo run -p 6               # Pipeline 6: conference papers
+dailyinfo run -p 7               # Pipeline 7: social intelligence
 dailyinfo run -f all             # Force regenerate all sources
 dailyinfo run -f arxiv_cs_ai    # Force regenerate one source
+
+# Social Intelligence
+dailyinfo social doctor          # Diagnose social setup (Agent-Reach + X backend)
+dailyinfo social setup           # Interactive setup wizard for social platforms
 
 # Push to Discord
 dailyinfo push                   # Today's briefings
@@ -71,7 +77,7 @@ uv run mkdocs serve              # Local preview
 
 ## Architecture
 
-### Five Pipelines
+### Six Pipelines
 
 | Pipeline | Sources | Output |
 |----------|---------|--------|
@@ -80,14 +86,16 @@ uv run mkdocs serve              # Local preview
 | 3 | arXiv CS.AI (RSS, up to 500 articles) | `arxiv/` |
 | 4 | GitHub Trending (scrape), HuggingFace (API) | `code/` |
 | 5 | DLUT university sites (scrape + API) | `resource/` |
+| 6 | OpenReview conferences (API v2 + lifecycle state) | `conference/` |
+| 7 | Social Intelligence (X/Twitter via Agent-Reach) | `social/` |
 
 Each pipeline is independent — a failure in one does not affect the others. Common processing logic (fetch → batch → AI → merge → save) is shared via `_process_regular_source()`.
 
 ### Data Flow
 
-1. **Collection**: FreshRSS for RSS; `datasource.py` handles scraping/API
-2. **Processing** (`run_pipelines.py`): Fetch -> format -> call DeepSeek AI with prompt templates -> save markdown to `~/.myagentdata/dailyinfo/briefings/{category}/`
-3. **Push** (`push_to_discord.py`): Scan briefings -> POST to Discord channels -> move to `pushed/{category}/`
+1. **Collection**: FreshRSS for RSS; `datasource.py` handles scraping/API; `social/agent_reach.py` wraps Agent-Reach CLI
+2. **Processing** (`run_pipelines.py`): Fetch → format → call DeepSeek AI with prompt templates → save markdown to `~/.myagentdata/dailyinfo/briefings/{category}/`
+3. **Push** (`push_to_discord.py`): Scan briefings → POST to Discord channels → move to `pushed/{category}/`
 
 ### DataSource Class Hierarchy
 
@@ -95,6 +103,69 @@ Each pipeline is independent — a failure in one does not affect the others. Co
   - `RSSDataSource` - FreshRSS SQLite DB
   - `ScrapeDataSource` - HTML scraping (GitHub Trending, DLUT sites, Chinese water journals)
   - `APIDataSource` - REST API calls (HuggingFace, DLUT recruitment, Crossref)
+
+### Social Intelligence Pipeline (Pipeline 7)
+
+Pipeline 7 integrates Agent-Reach as a social data source for X/Twitter intelligence.
+
+**Key Components:**
+
+- `scripts/social/agent_reach.py` — `AgentReachAdapter` + `ReachCommandRunner`
+  - Wraps `agent-reach doctor --json` for capability probe
+  - Provides stable `x_user_posts()` and `x_search()` methods
+  - Backend routing: twitter-cli → OpenCLI fallback
+- `scripts/social/datasource.py` — `SocialDataSource` (extends `DataSource`)
+  - Supports `researcher_watch` mode (fetch posts from configured handles)
+  - Supports `search` mode (keyword search with cross-query dedup)
+  - Uses `platform:item_id` canonical identity for stable dedup
+- `scripts/social/models.py` — `SocialItem`, `ReachCapabilities`, `CommandResult`
+- `scripts/social/normalize.py` — Parse twitter-cli/OpenCLI output → `SocialItem`
+- `scripts/social/raw_store.py` — Persist raw items to `raw/social/<date>/<run_id>/`
+- `scripts/social/seen_store.py` — Global `SocialSeenStore` + stable identity resolution
+
+**Configuration:**
+
+- `config/sources.json` — social source definitions (type: "social")
+- `config/researchers.json` — researcher watchlists grouped by topic
+- Environment: `DISCORD_CHANNEL_SOCIAL`, `DISCORD_CHANNEL_SOCIAL_DEV`, `DISCORD_CHANNEL_SOCIAL_STAGING`
+
+**Data Flow:**
+
+```
+Agent-Reach doctor --json
+    ↓
+Twitter backend probe
+    ↓
+x_user_posts / x_search
+    ↓
+Normalize → SocialItem[]
+    ↓
+raw/social persistence (BEFORE dedup)
+    ↓
+lookback filtering
+    ↓
+persistent seen filter (platform:item_id)
+    ↓
+cross-source dedup (global SocialSeenStore)
+    ↓
+source Item[]
+    ↓
+AI summary (DeepSeek)
+    ↓
+briefings/social/<source>_briefing_<date>_<timestamp>.md
+    ↓
+commit social seen state
+    ↓
+Discord social channel
+```
+
+**Key Design Decisions:**
+
+- **Stable identity**: Uses `platform:item_id` (e.g. `x:1959234892345678901`) instead of URL for dedup
+- **Raw persistence**: Saves to `raw/social/` before dedup/AI — never lose data
+- **Incremental runs**: Timestamped filenames allow multiple runs per day; no overwrites
+- **Graceful degradation**: Twitter fetch failure doesn't block other researchers or sources
+- **Credential safety**: Agent-Reach owns auth config; DailyInfo never persists tokens
 
 ### Key Design Patterns
 
@@ -107,7 +178,7 @@ Each pipeline is independent — a failure in one does not affect the others. Co
 
 ## Source Configuration
 
-Sources in `config/sources.json` have types: `rss`, `api`, `scrape`. Categories: `papers`, `ai_news`, `code`, `resource`.
+Sources in `config/sources.json` have types: `rss`, `api`, `scrape`, `social`. Categories: `papers`, `ai_news`, `code`, `resource`, `social`.
 
 Defaults (all overridable per-source): `lookback_hours: 24`, `max_articles_per_batch: 10`, `model: deepseek-v4-pro`.
 

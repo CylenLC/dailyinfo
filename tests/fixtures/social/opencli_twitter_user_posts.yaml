@@ -1,0 +1,12 @@
+---
+- id: "1959234892345678901"
+  text: "Just released my new paper on multimodal foundation models for hydrology!"
+  author:
+    name: "Andrej Karpathy"
+    username: "karpathy"
+  created_at: "2026-10-12T07:32:15Z"
+  favorite_count: 1294
+  retweet_count: 201
+  reply_count: 58
+  quote_count: 19
+  url: "https://x.com/karpathy/status/1959234892345678901"

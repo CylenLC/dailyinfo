@@ -46,7 +46,7 @@ def _env_banner() -> str:
     return f"[env:{CURRENT_ENV}]"
 
 
-CATEGORIES = ["papers", "ai_news", "code", "resource", "arxiv"]
+CATEGORIES = ["papers", "ai_news", "code", "resource", "arxiv", "social"]
 
 
 def _python() -> str:
@@ -74,11 +74,15 @@ def _read_env_keys(keys: list[str]) -> dict[str, str]:
 
 
 def _ensure_workspace() -> None:
-    """Create ~/.myagentdata/dailyinfo/{freshrss/data,briefings/*,pushed/*}."""
+    """Create ~/.myagentdata/dailyinfo/{freshrss/data,briefings/*,pushed/*,raw/social/*}."""
+    from paths import RAW_DIR, SOCIAL_RAW_DIR
+
     FRESHRSS_DATA.mkdir(parents=True, exist_ok=True)
     for category in CATEGORIES:
         BRIEFINGS_DIR.joinpath(category).mkdir(parents=True, exist_ok=True)
         PUSHED_DIR.joinpath(category).mkdir(parents=True, exist_ok=True)
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    SOCIAL_RAW_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +130,7 @@ def install():
         f"DISCORD_CHANNEL_CODE{suffix}",
         f"DISCORD_CHANNEL_RESOURCE{suffix}",
         f"DISCORD_CHANNEL_ARXIV{suffix}",
+        f"DISCORD_CHANNEL_SOCIAL{suffix}",
     ]
     env = _read_env_keys(required + channel_keys)
 
@@ -233,9 +238,9 @@ def restart():
 @click.option(
     "--pipeline",
     "-p",
-    type=click.Choice(["1", "2", "3", "4", "5", "all"]),
+    type=click.Choice(["1", "2", "3", "4", "5", "7", "all"]),
     default="all",
-    help="Pipeline to run: 1=papers, 2=ai_news, 3=arxiv, 4=code, 5=resource.",
+    help="Pipeline to run: 1=papers, 2=ai_news, 3=arxiv, 4=code, 5=resource, 7=social.",
 )
 @click.option(
     "-f",
@@ -492,6 +497,80 @@ def clean_cache(max_age, dry_run):
 
     if errors > 0 and not dry_run:
         sys.exit(1)
+
+
+@cli.group(name="social")
+def social_group():
+    """Social intelligence commands (Agent-Reach + X/Twitter)."""
+    pass
+
+
+@social_group.command(name="doctor")
+def social_doctor():
+    """Diagnose social intelligence setup (Agent-Reach + X backend)."""
+    try:
+        from scripts.social.agent_reach import AgentReachAdapter
+
+        adapter = AgentReachAdapter()
+        caps = adapter.probe()
+
+        click.echo("DailyInfo Social Intelligence")
+        click.echo("=" * 40)
+        click.echo("")
+
+        # Agent-Reach
+        version = caps.agent_reach_version or "unknown"
+        click.echo(f"Agent Reach  version       {version}")
+
+        # Twitter
+        twitter_status = "READY" if caps.twitter_available else "UNAVAILABLE"
+        twitter_backend = caps.twitter_backend or "none"
+        click.echo(f"X             status        {twitter_status}")
+        if caps.twitter_backend:
+            click.echo(f"               backend      {twitter_backend}")
+
+        # OpenCLI fallback
+        opencli_status = "READY" if caps.opencli_available else "UNAVAILABLE"
+        click.echo(f"OpenCLI       status        {opencli_status}")
+
+        click.echo("")
+        click.echo("Result")
+        if caps.twitter_available or caps.opencli_available:
+            click.echo("  READY")
+        else:
+            click.echo("  NEED SETUP")
+            click.echo("  Run: dailyinfo social setup")
+
+    except Exception as exc:
+        click.echo(f"  ERROR: {exc}")
+        click.echo("  Agent-Reach may not be installed.")
+        click.echo("  Install: pip install -e '.[social]'")
+        sys.exit(1)
+
+
+@social_group.command(name="setup")
+def social_setup():
+    """Interactive setup wizard for social platforms (delegates to Agent-Reach)."""
+    click.echo("==> Social Intelligence Setup")
+    click.echo("")
+    click.echo("This wizard delegates to Agent-Reach's own configure command.")
+    click.echo("Please follow the prompts to configure your social platforms.")
+    click.echo("")
+
+    # Check agent-reach is installed
+    import shutil
+
+    if not shutil.which("agent-reach"):
+        click.echo("  ERROR: agent-reach not found")
+        click.echo("  Install: pip install -e '.[social]'")
+        sys.exit(1)
+
+    # Run agent-reach setup
+    result = subprocess.run(
+        ["agent-reach", "setup"],
+        cwd=PROJECT_ROOT,
+    )
+    sys.exit(result.returncode)
 
 
 if __name__ == "__main__":

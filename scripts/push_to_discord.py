@@ -88,7 +88,7 @@ if not DISCORD_BOT_TOKEN:
 # Missing entries cause that category to be skipped at push time, not a fatal error.
 DISCORD_CHANNELS = {
     category: get_channel_id(category)
-    for category in ("papers", "ai_news", "code", "resource", "arxiv", "weekly")
+    for category in ("papers", "ai_news", "code", "resource", "arxiv", "weekly", "social")
 }
 # arxiv shares the ai_news Discord channel
 if not DISCORD_CHANNELS.get("arxiv"):
@@ -494,7 +494,7 @@ def main(date=None, categories=None):
 
     total_pushed = 0
 
-    PUSH_ORDER = ["papers", "code", "resource", "ai_news", "arxiv", "weekly"]
+    PUSH_ORDER = ["papers", "code", "resource", "ai_news", "arxiv", "weekly", "social"]
     for category in PUSH_ORDER:
         if category not in active:
             continue

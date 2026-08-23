@@ -264,15 +264,24 @@ class DataSource(ABC):
 
     def _filter_seen(self, items: list[Item]) -> list[Item]:
         self._total_before_filter = len(items)
-        return [it for it in items if it.url not in self._seen]
+        return [it for it in items if self.item_identity(it) not in self._seen]
 
     def commit_seen(self, items: list[Item]) -> None:
-        """Record item URLs as processed. Called after briefing is saved."""
+        """Record item identities as processed. Called after briefing is saved."""
         today = datetime.date.today().isoformat()
         for it in items:
-            if it.url and it.url not in self._seen:
-                self._seen[it.url] = today
+            key = self.item_identity(it)
+            if key and key not in self._seen:
+                self._seen[key] = today
         self._save_seen()
+
+    def item_identity(self, item: Item) -> str:
+        """Return stable identity key for dedup.
+
+        Override in subclasses for platform-specific identity (e.g. social uses
+        canonical_id `platform:item_id` instead of URL).
+        """
+        return item.url
 
 
     @abstractmethod
@@ -310,6 +319,16 @@ class DataSource(ABC):
             )
         if t == "api":
             return APIDataSource(config, defaults)
+        if t == "social":
+            # Lazy import to avoid circular dependency
+            from scripts.social.datasource import SocialDataSource
+
+            return SocialDataSource(
+                config,
+                defaults,
+                reach=ctx.get("reach"),
+                researchers=ctx.get("researchers"),
+            )
         return ScrapeDataSource(config, defaults)
 
 

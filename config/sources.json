@@ -12,7 +12,9 @@
     "code_trending": "你是一位资深技术编辑。请为以下技术趋势项目各生成一句话中文摘要（突出核心功能/亮点）：\n\n{items}\n\n返回格式：按原始分组，每个项目一行，格式为：\n**项目名** — 一句话描述\n\n要求：简洁精准，突出技术价值和创新点。",
     "university_news": "你是一位高校信息助理。请对以下大连理工大学相关网站的最新通知/新闻进行简洁汇总：\n\n{items}\n\n返回格式：每条一行，格式为：\n**[日期] 标题** — 一句话说明（如无摘要则概括标题含义）\n\n要求：突出与科研、项目申报、学术活动相关的重要信息；如有申报截止日期请着重标注。",
     "university_news_unified": "你是一位高校信息助理。以下是大连理工大学各栏目的最新动态，请整理为一篇统一的校园新闻简报。\n\n{items}\n\n要求：\n1. 严格保留原有栏目分节结构，无内容的栏目省略不写\n2. 跨栏目去重：同一事件若在多个栏目出现，只在最相关的栏目保留一条，行末加括注「（另见：XX）」\n3. 每条格式：**[日期] 标题** — 一句话摘要\n4. 重点标注科研项目申报截止日期等时效性信息（如有请加 ⚠️）\n5. 结尾加一行：「**本期信源：**」后列出本次有内容的栏目名称",
-    "recruitment": "你是一位招聘信息助理。请对以下招聘/实习/选调信息进行整理，每条突出关键信息：\n\n{items}\n\n返回格式：每条一行，格式为：\n🏢 **公司/单位名** — 岗位方向 | ⚠️ 特别要求（如有户籍/学历/专业限制等则注明，否则省略）\n\n要求：从标题中提取公司或单位名称；尽量识别并标注截止日期和特殊限制条件；简洁精准。不要在列表之外添加任何总结、注释或补充说明。"
+    "recruitment": "你是一位招聘信息助理。请对以下招聘/实习/选调信息进行整理，每条突出关键信息：\n\n{items}\n\n返回格式：每条一行，格式为：\n🏢 **公司/单位名** — 岗位方向 | ⚠️ 特别要求（如有户籍/学历/专业限制等则注明，否则省略）\n\n要求：从标题中提取公司或单位名称；尽量识别并标注截止日期和特殊限制条件；简洁精准。不要在列表之外添加任何总结、注释或补充说明。",
+    "social_researcher_digest": "请为以下 {count} 条研究者动态生成中文简报。\n\n输入格式：\n序号.\nAuthor: 作者名 (@handle)\nPublished: 发布日期\nEngagement: 互动数据\nURL: 链接\nPost: 正文内容\n\n输出要求（严格遵守）：\n1. **优先识别**：\n   - 新论文 / preprint\n   - 新模型 / 项目发布\n   - 技术判断 / 方法论观点\n   - 对现有工作的重要评价\n   - 数据 / benchmark 发布\n\n2. **忽略**：\n   - 日常闲聊\n   - 纯转发无评论\n   - 无技术信息的个人动态\n\n3. **格式**：\n   - 每条一行：**@handle** - 一句话核心内容\n   - 标注 [论文] / [项目] / [观点] 等标签\n   - 附原文链接\n   - 按重要性降序排列\n\n4. **全部使用中文**\n\n{items}",
+    "social_search_digest": "请为以下 {count} 条搜索结果生成中文社区热点摘要。\n\n输入格式：\n序号.\nAuthor: 作者名 (@handle)\nPublished: 发布日期\nEngagement: 互动数据\nURL: 链接\nPost: 正文内容\n\n输出要求：\n1. 找出共同主题和讨论热点\n2. 区分原始信息和社区反应\n3. 不因纯点赞高就夸大重要性\n4. 保留作者与链接\n5. 按重要性排序\n\n{items}"
   },
   "sources": [
     {
@@ -652,6 +654,51 @@
       "max_articles_per_batch": 20,
       "prompt_template": "recruitment",
       "type": "api"
+    },
+    {
+      "name": "x_ai_researchers",
+      "display_name": "AI/ML Researchers on X",
+      "type": "social",
+      "provider": "agent_reach",
+      "platform": "x",
+      "mode": "researcher_watch",
+      "watchlist": "ai_ml",
+      "category": "social",
+      "enabled": false,
+      "lookback_hours": 24,
+      "max_items_per_researcher": 5,
+      "max_items": 30,
+      "prompt_template": "social_researcher_digest",
+      "run_policy": "incremental",
+      "backend": {
+        "preferred": "twitter_cli",
+        "fallback": ["opencli"]
+      }
+    },
+    {
+      "name": "x_ai_search",
+      "display_name": "X AI Research Trends",
+      "type": "social",
+      "provider": "agent_reach",
+      "platform": "x",
+      "mode": "search",
+      "queries": [
+        "AI for Science",
+        "earth observation foundation model",
+        "hydrology deep learning",
+        "multimodal earth observation"
+      ],
+      "category": "social",
+      "enabled": false,
+      "lookback_hours": 24,
+      "max_items_per_query": 10,
+      "max_items": 30,
+      "prompt_template": "social_search_digest",
+      "run_policy": "incremental",
+      "backend": {
+        "preferred": "twitter_cli",
+        "fallback": ["opencli"]
+      }
     }
   ],
   "discord_channels": {

@@ -1,0 +1,17 @@
+[
+  {
+    "id_str": "1959234892345678901",
+    "id": 1959234892345678901,
+    "full_text": "Just released my new paper on multimodal foundation models for hydrology! Link: https://arxiv.org/abs/2026.12345",
+    "user": {
+      "name": "Andrej Karpathy",
+      "screen_name": "karpathy"
+    },
+    "created_at": "Mon Oct 12 07:32:15 +0000 2026",
+    "favorite_count": 1294,
+    "retweet_count": 201,
+    "reply_count": 58,
+    "quote_count": 19,
+    "url": "https://x.com/karpathy/status/1959234892345678901"
+  }
+]

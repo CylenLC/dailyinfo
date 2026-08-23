@@ -1,0 +1,35 @@
+{
+  "version": "1.5.0",
+  "github": {
+    "status": "ok",
+    "name": "GitHub 仓库和代码",
+    "message": "gh CLI 已配置",
+    "tier": 0,
+    "backends": ["gh CLI"],
+    "active_backend": "gh CLI"
+  },
+  "twitter": {
+    "status": "ok",
+    "name": "Twitter/X 推文",
+    "message": "twitter-cli 已安装且已配置",
+    "tier": 1,
+    "backends": ["twitter-cli", "OpenCLI"],
+    "active_backend": "twitter-cli"
+  },
+  "youtube": {
+    "status": "ok",
+    "name": "YouTube 视频和字幕",
+    "message": "yt-dlp 已安装",
+    "tier": 0,
+    "backends": ["yt-dlp"],
+    "active_backend": "yt-dlp"
+  },
+  "reddit": {
+    "status": "off",
+    "name": "Reddit 帖子和评论",
+    "message": "未安装任何 Reddit 后端",
+    "tier": 1,
+    "backends": ["OpenCLI", "rdt-cli"],
+    "active_backend": null
+  }
+}

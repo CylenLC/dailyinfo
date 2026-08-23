@@ -104,6 +104,8 @@ FRESHRSS_DATA = WORKSPACE_ROOT / "freshrss" / "data"
 CURRENT_ENV = get_dailyinfo_env()
 
 STATE_DIR = WORKSPACE_ROOT / "state"
+RAW_DIR = WORKSPACE_ROOT / "raw"
+SOCIAL_RAW_DIR = RAW_DIR / "social"
 
 
 # -----------------------------------------------------------------------

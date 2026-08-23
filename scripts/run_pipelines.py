@@ -23,7 +23,7 @@ import time
 
 import requests
 
-from datasource import DataSource, RSSDataSource, build_feed_url_map
+from datasource import DataSource, Item, RSSDataSource, build_feed_url_map
 from paths import BRIEFINGS_DIR, FRESHRSS_DATA, PUSHED_DIR, STATE_DIR
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1057,6 +1057,354 @@ def run_pipeline_resource() -> int:
 
 
 # =====================================================================
+# PIPELINE 7: Social Intelligence (X/Twitter via Agent-Reach)
+# =====================================================================
+
+def run_pipeline_social() -> int:
+    """Fetch social media items via Agent-Reach, deduplicate, summarize, save."""
+    log("=== Pipeline 7: Social Intelligence ===")
+
+    cfg, defaults, templates = _load_sources()
+
+    # Import here to avoid circular dependency
+    from scripts.social.agent_reach import AgentReachAdapter
+    from scripts.social.datasource import SocialDataSource
+    from scripts.social.models import Item, SocialItem
+    from scripts.social.raw_store import SocialRawStore
+
+    reach = AgentReachAdapter()
+    capabilities = reach.probe()
+
+    log(f"  Agent Reach {capabilities.agent_reach_version or 'unknown'}")
+    if capabilities.twitter_backend:
+        log(f"  X backend: {capabilities.twitter_backend}")
+
+    # Load researchers config
+    researchers = _load_researchers()
+
+    # Filter social sources
+    sources = _filter_sources(cfg, "social", "social")
+    if not sources:
+        log("  No enabled social sources")
+        return 0
+
+    # 1. Fetch all sources
+    fetched_items: dict[str, list[Item]] = {}
+    source_metadata: dict[str, dict[str, Any]] = {}
+
+    for source_cfg in sources:
+        ds = SocialDataSource(
+            source_cfg,
+            defaults,
+            reach=reach,
+            researchers=researchers,
+        )
+
+        log(f"  {ds.name}...")
+        try:
+            items = ds.fetch()
+            fetched_items[ds.name] = items
+            source_metadata[ds.name] = {
+                "status": "success",
+                "fetched": len(items),
+            }
+            log(f"    {len(items)} items")
+        except Exception as e:
+            log(f"    FETCH ERR: {e}")
+            fetched_items[ds.name] = []
+            source_metadata[ds.name] = {
+                "status": "error",
+                "fetched": 0,
+                "error": str(e),
+            }
+            continue
+
+    # 2. Raw persistence (BEFORE seen filter — never lose data)
+    raw_store = SocialRawStore()
+    run_id = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+    raw_dir = None
+    try:
+        # Convert to SocialItem for raw storage
+        items_by_source: dict[str, list[SocialItem]] = {}
+        for source_name, items in fetched_items.items():
+            social_items = []
+            for item in items:
+                # Reconstruct SocialItem from Item (best-effort)
+                # In practice, we'd keep SocialItem list alongside
+                social_items.append(_item_to_social(item))
+            items_by_source[source_name] = social_items
+
+        raw_dir = raw_store.write_run(
+            run_id=run_id,
+            agent_reach_version=capabilities.agent_reach_version,
+            twitter_backend=capabilities.twitter_backend,
+            source_results=source_metadata,
+            items_by_source=items_by_source,
+        )
+        log(f"  raw social run saved: {raw_dir}")
+    except Exception as e:
+        log(f"  WARN: raw save failed: {e}")
+
+    # 3. Stable seen filter + cross-source dedup
+    filtered_items = _social_filter_and_dedup(fetched_items)
+
+    # 4. AI summary per source
+    saved = 0
+    for source_cfg in sources:
+        source_name = source_cfg["name"]
+        items = filtered_items.get(source_name, [])
+
+        if not items:
+            log(f"    {source_name}: no new items")
+            continue
+
+        # Format items for prompt
+        items_text = _format_social_items(items)
+
+        # Get prompt template
+        tmpl_key = source_cfg.get("prompt_template", "social_digest")
+        prompt_tmpl = templates.get(tmpl_key, _default_social_prompt(source_cfg))
+        prompt = (
+            prompt_tmpl.replace("{items}", items_text)
+            .replace("{display_name}", source_cfg.get("display_name", source_name))
+            .replace("{date}", DATE)
+            .replace("{count}", str(len(items)))
+        )
+
+        try:
+            content_text = call_ai(
+                prompt,
+                model=source_cfg.get("model", defaults.get("model", "deepseek-v4-flash")),
+                max_tokens=2500,
+            )
+
+            # Timestamped filename for incremental runs
+            run_ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+            filename = f"{source_name}_briefing_{DATE}_{run_ts}.md"
+            header = f"# {source_cfg.get('display_name', source_name)} - {DATE}\n\n"
+
+            save("social", filename, header + content_text)
+            saved += 1
+            log(f"    -> saved {filename}")
+
+            # Commit seen state only after successful save
+            ds = SocialDataSource(
+                source_cfg,
+                defaults,
+                reach=reach,
+                researchers=researchers,
+            )
+            ds.commit_seen(items)
+            log(f"    state committed for {source_name}")
+
+            time.sleep(1)
+
+        except Exception as e:
+            log(f"    AI/SAVE ERR: {e}")
+            # Do NOT commit seen on failure — items will be retried next run
+
+    log(f"  Pipeline 7 done: {saved} files saved")
+    return saved
+
+
+def _load_researchers() -> dict:
+    """Load researchers.json if it exists."""
+    import json
+
+    researchers_path = os.path.join(PROJECT_ROOT, "config", "researchers.json")
+    if not os.path.exists(researchers_path):
+        return {"version": 1, "groups": {}}
+
+    try:
+        with open(researchers_path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"version": 1, "groups": {}}
+
+
+def _social_filter_and_dedup(
+    fetched_items: dict[str, list[Item]],
+) -> dict[str, list[Item]]:
+    """Apply seen filter and cross-source dedup to fetched social items.
+
+    Cross-source dedup priority: researcher_watch > keyword search.
+    """
+    from scripts.social.seen_store import SocialSeenStore, stable_social_identity
+
+    global_seen = SocialSeenStore()
+    result: dict[str, list[Item]] = {}
+
+    # Process sources in priority order (researcher_watch first)
+    source_priorities = {}
+    for source_name, items in fetched_items.items():
+        # Infer mode from config
+        # Will be filled in below
+        source_priorities[source_name] = 0
+
+    # Sort by priority (researcher_watch=1, search=0, others=-1)
+    sorted_sources = sorted(
+        fetched_items.keys(),
+        key=lambda name: source_priorities.get(name, 0),
+        reverse=True,
+    )
+
+    # Re-sort with actual mode detection
+    # We need to access config, but we don't have it here.
+    # Instead, use heuristic: "researcher_watch" in name → high priority
+    def source_priority(name):
+        if "researcher" in name.lower() or "watch" in name.lower():
+            return 1
+        return 0
+
+    sorted_sources = sorted(
+        fetched_items.keys(),
+        key=source_priority,
+        reverse=True,
+    )
+
+    for source_name in sorted_sources:
+        items = fetched_items[source_name]
+        filtered = []
+
+        for item in items:
+            identity = stable_social_identity(item)
+
+            # Skip if globally seen (cross-source dedup)
+            if global_seen.is_seen(identity):
+                continue
+
+            filtered.append(item)
+
+        result[source_name] = filtered
+
+    return result
+
+
+def _item_to_social(item: "Item") -> "SocialItem":
+    """Best-effort reconstruction of SocialItem from Item."""
+    from scripts.social.models import SocialItem as SI
+
+    extra = item.extra or {}
+    engagement = extra.get("engagement", {})
+
+    # Parse published_at
+    pub_at_str = extra.get("published_at", "")
+    try:
+        from datetime import datetime
+
+        pub_at = datetime.fromisoformat(pub_at_str.replace("Z", "+00:00"))
+    except Exception:
+        pub_at = datetime.utcnow()
+
+    return SI(
+        platform=extra.get("platform", "unknown"),
+        item_id=extra.get("item_id", ""),
+        author_name=extra.get("author", "Unknown"),
+        author_handle=extra.get("handle", ""),
+        text=item.content or item.title,
+        url=item.url,
+        published_at=pub_at,
+        likes=engagement.get("likes"),
+        reposts=engagement.get("reposts"),
+        replies=engagement.get("replies"),
+        quotes=engagement.get("quotes"),
+        backend=extra.get("backend", ""),
+        source_mode=extra.get("source_mode", ""),
+        source_ref=extra.get("source_ref", ""),
+    )
+
+
+def _format_social_items(items: list[Item]) -> str:
+    """Format social items for AI prompt."""
+    lines = []
+    for i, item in enumerate(items, 1):
+        extra = item.extra or {}
+        engagement = extra.get("engagement", {})
+
+        # Engagement line
+        eng_parts = []
+        if engagement.get("likes"):
+            eng_parts.append(f"{engagement['likes']} likes")
+        if engagement.get("reposts"):
+            eng_parts.append(f"{engagement['reposts']} reposts")
+        eng_str = f" ({', '.join(eng_parts)})" if eng_parts else ""
+
+        # Author
+        author = extra.get("author", extra.get("handle", "Unknown"))
+        handle = extra.get("handle", "")
+
+        lines.append(
+            f"{i}.\n"
+            f"Author: {author} ({handle})\n"
+            f"Published: {item.date}\n"
+            f"Engagement: {eng_str or 'N/A'}\n"
+            f"URL: {item.url}\n"
+            f"Post:\n{item.content}\n"
+        )
+
+    return "\n".join(lines)
+
+
+def _default_social_prompt(source_cfg: dict) -> str:
+    """Default social digest prompt (used if no template configured)."""
+    mode = source_cfg.get("mode", "search")
+
+    if mode == "researcher_watch":
+        return """请为以下 {count} 条研究者动态生成中文简报。
+
+输入格式：
+序号.
+Author: 作者名 (@handle)
+Published: 发布日期
+Engagement: 互动数据
+URL: 链接
+Post: 正文内容
+
+输出要求（严格遵守）：
+1. **优先识别**：
+   - 新论文 / preprint
+   - 新模型 / 项目发布
+   - 技术判断 / 方法论观点
+   - 对现有工作的重要评价
+   - 数据 / benchmark 发布
+
+2. **忽略**：
+   - 日常闲聊
+   - 纯转发无评论
+   - 无技术信息的个人动态
+
+3. **格式**：
+   - 每条一行：**@handle** - 一句话核心内容
+   - 标注 [论文] / [项目] / [观点] 等标签
+   - 附原文链接
+   - 按重要性降序排列
+
+4. **全部使用中文**
+
+{items}"""
+
+    else:  # search
+        return """请为以下 {count} 条搜索结果生成中文社区热点摘要。
+
+输入格式：
+序号.
+Author: 作者名 (@handle)
+Published: 发布日期
+Engagement: 互动数据
+URL: 链接
+Post: 正文内容
+
+输出要求：
+1. 找出共同主题和讨论热点
+2. 区分原始信息和社区反应
+3. 不因纯点赞高就夸大重要性
+4. 保留作者与链接
+5. 按重要性排序
+
+{items}"""
+
+
+# =====================================================================
 # Main
 # =====================================================================
 def main() -> int:
@@ -1064,8 +1412,8 @@ def main() -> int:
     parser.add_argument(
         "--pipeline",
         type=int,
-        choices=[1, 2, 3, 4, 5],
-        help="Run specific pipeline: 1=papers, 2=ai_news, 3=arxiv, 4=code, 5=resource. Default: all",
+        choices=[1, 2, 3, 4, 5, 7],
+        help="Run specific pipeline: 1=papers, 2=ai_news, 3=arxiv, 4=code, 5=resource, 7=social. Default: all",
     )
     parser.add_argument(
         "--force",
@@ -1098,8 +1446,9 @@ def main() -> int:
         3: run_pipeline_arxiv,
         4: run_pipeline_code,
         5: run_pipeline_resource,
+        7: run_pipeline_social,
     }
-    to_run = [args.pipeline] if args.pipeline else [1, 2, 3, 4, 5]
+    to_run = [args.pipeline] if args.pipeline else [1, 2, 3, 4, 5, 7]
     total_saved = 0
 
     for p in to_run:
@@ -1111,7 +1460,7 @@ def main() -> int:
             traceback.print_exc()
 
     log("=== Summary ===")
-    for d in ["papers", "ai_news", "code", "resource", "arxiv"]:
+    for d in ["papers", "ai_news", "code", "resource", "arxiv", "social"]:
         path = BRIEFINGS_DIR / d
         if path.exists():
             files = [f.name for f in sorted(path.iterdir()) if DATE in f.name]

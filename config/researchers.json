@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "groups": {
+    "ai_ml": [
+      {
+        "name": "Andrej Karpathy",
+        "handle": "@karpathy",
+        "enabled": true,
+        "weight": 1.0,
+        "topics": ["llm", "agents", "deep_learning"]
+      },
+      {
+        "name": "Yann LeCun",
+        "handle": "@ylecun",
+        "enabled": true,
+        "weight": 1.0,
+        "topics": ["world_model", "representation_learning"]
+      },
+      {
+        "name": "Jim Fan",
+        "handle": "@DrJimFan",
+        "enabled": true,
+        "weight": 1.0,
+        "topics": ["agents", "robotics"]
+      },
+      {
+        "name": "Jason Wei",
+        "handle": "@jasonwei20",
+        "enabled": true,
+        "weight": 1.0,
+        "topics": ["chain_of_thought", "reasoning"]
+      },
+      {
+        "name": "Szymon Sidor",
+        "handle": "@szymon-sidor",
+        "enabled": true,
+        "weight": 0.8,
+        "topics": ["llm", "multimodal"]
+      }
+    ],
+    "earth_ai": [],
+    "hydrology_ai": [],
+    "computer_vision": [],
+    "robotics": []
+  }
+}
