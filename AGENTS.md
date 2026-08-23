@@ -44,7 +44,7 @@ python3 scripts/run_pipelines.py --pipeline 2  # AI 资讯
 python3 scripts/run_pipelines.py --pipeline 3  # arXiv CS.AI
 python3 scripts/run_pipelines.py --pipeline 4  # 技术趋势
 python3 scripts/run_pipelines.py --pipeline 5  # 大工院所资讯
-python3 scripts/run_pipelines.py --pipeline 6  # OpenReview 顶会论文事件
+python3 scripts/run_pipelines.py --pipeline 6  # 顶会论文（OpenReview + 官方论文集）
 
 # 或使用 CLI（uv pip install -e . 后可用）
 dailyinfo run
@@ -115,6 +115,7 @@ python3 -c "import json; json.load(open('config/sources.json'))"
 - `ai_news` — AI 新闻
 - `code` — 技术趋势
 - `resource` — 高校资讯
+- `conference` — 顶会论文；OpenReview 源可含公开评审生命周期，论文集/书目源仅含论文元数据
 
 ### 字段覆盖
 

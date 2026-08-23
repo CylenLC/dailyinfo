@@ -33,6 +33,7 @@ DEFAULT_ALLOWED_HOSTS = {
     "openaccess.thecvf.com",
     "papers.nips.cc",
 }
+OPENREVIEW_AUTH_HOSTS = {"openreview.net", "api2.openreview.net"}
 DEFAULT_MAX_PDF_BYTES = 50 * 1024 * 1024
 DEFAULT_MAX_IMAGE_BYTES = 8 * 1024 * 1024
 DEFAULT_TIMEOUT = (10.0, 45.0)
@@ -222,12 +223,16 @@ def download_pdf(
         ),
         "Accept": "application/pdf,*/*;q=0.8",
     }
-    if headers:
-        base_headers.update(headers)
-        # Never let a JSON-only client header prevent PDF negotiation.
-        base_headers["Accept"] = "application/pdf,*/*;q=0.8"
-
     for candidate in candidates:
+        candidate_headers = dict(base_headers)
+        candidate_host = (urlparse(candidate).hostname or "").casefold().rstrip(".")
+        # ``headers`` comes from the authenticated OpenReview client and may
+        # contain a Bearer token. Never forward that client context to arXiv,
+        # proceedings sites, DOI resolvers, or other third-party PDF hosts.
+        if headers and candidate_host in OPENREVIEW_AUTH_HOSTS:
+            candidate_headers.update(headers)
+            # Never let a JSON-only client header prevent PDF negotiation.
+            candidate_headers["Accept"] = "application/pdf,*/*;q=0.8"
         for attempt, delay in enumerate((0, 2, 5), start=1):
             if delay:
                 time.sleep(delay)
@@ -237,7 +242,7 @@ def download_pdf(
                     candidate,
                     stream=True,
                     timeout=timeout,
-                    headers=base_headers,
+                    headers=candidate_headers,
                 )
                 status = int(getattr(response, "status_code", 200))
                 if status in {403, 404}:

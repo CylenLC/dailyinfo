@@ -2,7 +2,7 @@
 
 中文 | [English](README.md)
 
-DailyInfo 是面向 AI for Science 研究者的自动化科研情报收集器。每天自动从 RSS 源、网页和 API 聚合期刊论文、AI 资讯、arXiv 预印本、代码趋势和院所动态,再用 DeepSeek 生成简洁的中文简报,直接推送到你的 Discord。
+DailyInfo 是面向 AI for Science 研究者的自动化科研情报收集器。每天自动从 RSS 源、网页和 API 聚合期刊论文、AI 资讯、arXiv 预印本、顶会论文、代码趋势和院所动态,再用 DeepSeek 生成简洁的中文简报,直接推送到你的 Discord。
 
 ## 工作原理
 
@@ -26,7 +26,7 @@ FreshRSS / 网页抓取 / API 数据源
 
 | | |
 |---|---|
-| **六条流水线** | 期刊论文 · AI 资讯 · arXiv CS.AI · GitHub Trending + HuggingFace · 院所动态 · OpenReview 顶会论文与公开评审事件 |
+| **六条流水线** | 期刊论文 · AI 资讯 · arXiv CS.AI · GitHub Trending + HuggingFace · 院所动态 · 顶会论文与 OpenReview 生命周期事件 |
 | **中文优先简报** | AI 生成中文摘要;主模型 API 故障时自动降级到 OpenRouter 备用模型 |
 | **配置驱动** | 在 `config/sources.json` 中添加 RSS、网页或 API 数据源,无需改代码 |
 | **幂等,可安全重跑** | 已有今日简报的数据源自动跳过;已推送文件不会重复发送 |
@@ -114,8 +114,9 @@ dailyinfo push
 | `dailyinfo run -p 3` | 流水线 3：arXiv CS.AI |
 | `dailyinfo run -p 4` | 流水线 4：代码趋势 |
 | `dailyinfo run -p 5` | 流水线 5：院所资讯 |
-| `dailyinfo run -p 6` | 流水线 6：OpenReview 顶会论文 |
-| `dailyinfo run -p 6 --source openreview_iclr_2026` | 只运行指定会议源 |
+| `dailyinfo run -p 6` | 流水线 6：已启用的顶会来源 |
+| `dailyinfo run -p 6 --source openreview_iclr_2026` | 从 OpenReview 运行 ICLR 2026 |
+| `dailyinfo run -p 6 --source cvf_cvpr_2026` | 从 CVF Open Access 运行 CVPR 2026 |
 | `dailyinfo run -f all` | 强制重生全部数据源 |
 | `dailyinfo push` | 推送待处理简报到 Discord 并归档 |
 | `dailyinfo push -d 2026-04-22` | 推送指定日期简报 |

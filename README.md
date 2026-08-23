@@ -26,32 +26,42 @@ You wake up to a curated digest of everything relevant to your field — no feed
 
 | | |
 |---|---|
-| **Six pipelines** | Journal papers · AI news · arXiv CS.AI · GitHub + HuggingFace trends · University updates · OpenReview conference papers and public review events |
+| **Six pipelines** | Journal papers · AI news · arXiv CS.AI · GitHub + HuggingFace trends · University updates · conference papers and OpenReview lifecycle events |
 | **Chinese-first briefings** | AI summaries in Chinese with automatic fallback to an OpenRouter model when the primary API fails |
 | **Configuration-driven** | Add RSS, scrape, or API sources in `config/sources.json` — no code changes required |
 | **Idempotent & safe to rerun** | Sources with today's briefing are skipped; pushed files are never re-sent |
 | **Resilient** | Retries with exponential backoff, batch splitting on partial AI responses, per-source isolation |
 | **Scheduler-agnostic** | Bring your own cron, systemd timer, or agent runtime — DailyInfo owns the pipeline, not the clock |
 
-### OpenReview conference pipeline
+### Conference pipeline and actual sources
 
-Pipeline 6 supports the configured major conference venues through the
-OpenReview API v2. It uses a resumable SQLite checkpoint at
-`~/.myagentdata/dailyinfo/state/openreview.sqlite3` and processes discovery,
-retrieval, public forum updates, and briefing rendering as separate phases.
-The configured 2026 venues are ICLR, ICML, NeurIPS (formerly NIPS), AAAI, KDD
-(both Research Track cycles), CVPR, ACL, and EMNLP. ICCV and NAACL use their
-latest available main OpenReview venues (2025); neither has a 2026 main venue
-in OpenReview.
+Pipeline 6 normalizes several public conference sources into one resumable
+SQLite workflow at `~/.myagentdata/dailyinfo/state/openreview.sqlite3`.
+The source determines which information is available:
 
-- New and changed submissions are detected incrementally using a timestamp watermark.
-- A periodic full rescan repairs missed pages and detects changes to reviews, rebuttals, decisions, and status fields on older papers.
+| Enabled source | Conferences | Available data |
+|---|---|---|
+| OpenReview API v2 | ICLR 2026, ICML 2026, NeurIPS 2026 | Submissions plus public reviews, rebuttals, decisions, and status changes |
+| ACL Anthology | ACL 2026, EMNLP 2025, NAACL 2025 | Published-paper metadata; no review lifecycle |
+| CVF Open Access / ECVA | CVPR 2026, ICCV 2025, ECCV 2024 | Published-paper metadata; no review lifecycle |
+| DBLP | AAAI 2026, KDD 2026, IJCAI 2026 | Bibliographic metadata; no review lifecycle |
+| NeurIPS Proceedings | NeurIPS 2025 | Published-paper metadata; no review lifecycle |
+
+Additional OpenReview venue entries for AAAI, KDD, CVPR, ACL, EMNLP, ICCV,
+and NAACL are retained in `config/sources.json` but disabled. They are not
+polled unless explicitly enabled after a suitable public OpenReview venue is
+verified. Use the enabled canonical proceedings source shown above for those
+conferences.
+
+- New OpenReview submissions are discovered with a creation-time watermark; tracked forums are re-polled, and periodic full rescans catch other changes.
+- Static proceedings sources are periodically rescanned for newly published metadata.
 - Relevance uses the configured keyword/Embedding union; DeepSeek is used only for the final Chinese briefing.
-- Public review ratings are preserved as supplied by OpenReview. Relative scores are never inferred across venues.
-- `dailyinfo status` exposes the current run phase, cursor progress, candidates, and errors so interrupted runs can resume safely.
+- `dailyinfo status` exposes run phase, cursor progress, candidates, and errors so interrupted runs can resume safely.
 
-Optional authentication can be provided with `OPENREVIEW_USERNAME` and
-`OPENREVIEW_PASSWORD`; public-only filtering remains enabled by default.
+Optional OpenReview authentication can be provided with
+`OPENREVIEW_USERNAME` and `OPENREVIEW_PASSWORD`; public-only filtering remains
+enabled by default, and OpenReview credentials are never forwarded to external
+PDF or proceedings hosts.
 
 ## Screenshots
 
@@ -134,10 +144,10 @@ dailyinfo push
 | `dailyinfo run -p 3` | Pipeline 3: arXiv CS.AI |
 | `dailyinfo run -p 4` | Pipeline 4: code trending |
 | `dailyinfo run -p 5` | Pipeline 5: university/resource |
-| `dailyinfo run -p 6` | Pipeline 6: OpenReview conference papers |
-| `dailyinfo run -p 6 --source openreview_iclr_2026` | Run one conference source only |
-| `dailyinfo run -p 6 --source openreview_cvpr_2026` | Run CVPR 2026 only |
-| `dailyinfo status` | Show OpenReview checkpoint phase and progress |
+| `dailyinfo run -p 6` | Pipeline 6: configured conference sources |
+| `dailyinfo run -p 6 --source openreview_iclr_2026` | Run ICLR 2026 from OpenReview |
+| `dailyinfo run -p 6 --source cvf_cvpr_2026` | Run CVPR 2026 from CVF Open Access |
+| `dailyinfo status` | Show conference checkpoint phase and progress |
 | `dailyinfo run -f all` | Force regeneration for all sources |
 | `dailyinfo push` | Push pending briefings to Discord and archive them |
 | `dailyinfo push -d 2026-04-22` | Push briefings for a specific date |

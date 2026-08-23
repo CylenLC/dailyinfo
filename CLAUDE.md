@@ -34,7 +34,7 @@ dailyinfo run -p 2               # Pipeline 2: AI news
 dailyinfo run -p 3               # Pipeline 3: arXiv
 dailyinfo run -p 4               # Pipeline 4: code trending
 dailyinfo run -p 5               # Pipeline 5: university news
-dailyinfo run -p 6               # Pipeline 6: OpenReview conference events
+dailyinfo run -p 6               # Pipeline 6: conference sources and lifecycle events
 dailyinfo run -p 6 --source openreview_iclr_2026
 dailyinfo run -f all             # Force regenerate all sources
 dailyinfo run -f arxiv_cs_ai    # Force regenerate one source
@@ -82,7 +82,7 @@ uv run mkdocs serve              # Local preview
 | 3 | arXiv CS.AI (RSS, up to 500 articles) | `arxiv/` |
 | 4 | GitHub Trending (scrape), HuggingFace (API) | `code/` |
 | 5 | DLUT university sites (scrape + API) | `resource/` |
-| 6 | OpenReview conferences (API v2 + lifecycle state) | `conference/` |
+| 6 | Conference sources (OpenReview lifecycle + public proceedings) | `conference/` |
 
 Each pipeline is independent — a failure in one does not affect the others. Common processing logic (fetch → batch → AI → merge → save) is shared via `_process_regular_source()`.
 
@@ -99,9 +99,13 @@ Each pipeline is independent — a failure in one does not affect the others. Co
   - `ScrapeDataSource` - HTML scraping (GitHub Trending, DLUT sites, Chinese water journals)
 - `APIDataSource` - REST API calls (HuggingFace, DLUT recruitment, Crossref)
 
-OpenReview is intentionally not routed through the static `Item`/seen-URL
-contract. `OpenReviewProvider` normalizes API v2 data and the conference
-pipeline stores venue cursors, paper snapshots, and events in SQLite.
+Conference sources are intentionally not routed through the static
+`Item`/seen-URL contract. `OpenReviewProvider` supplies submissions and public
+lifecycle events for the enabled ICLR/ICML/NeurIPS 2026 venues. ACL Anthology,
+CVF/ECVA, DBLP, and NeurIPS Proceedings providers supply published-paper or
+bibliographic metadata only. The conference pipeline stores venue cursors,
+paper snapshots, and events in SQLite. Disabled OpenReview alternatives for
+other venues are configuration candidates, not active sources.
 
 ### Key Design Patterns
 

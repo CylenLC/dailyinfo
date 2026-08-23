@@ -113,6 +113,39 @@ def test_download_pdf_falls_back_after_web_challenge(monkeypatch):
     assert calls[1][1]["Authorization"] == "Bearer test"
 
 
+def test_download_pdf_does_not_forward_openreview_auth_to_external_host(monkeypatch):
+    calls = []
+
+    class Response:
+        url = "https://arxiv.org/pdf/2608.00001"
+        status_code = 200
+        headers = {"Content-Length": "6"}
+
+        def raise_for_status(self):
+            return None
+
+        def iter_content(self, chunk_size):
+            return [b"%PDF-1"]
+
+        def close(self):
+            return None
+
+    def get(url, **kwargs):
+        calls.append((url, kwargs["headers"]))
+        return Response()
+
+    monkeypatch.setattr("conference_figures.requests.get", get)
+
+    data = download_pdf(
+        "https://arxiv.org/pdf/2608.00001",
+        headers={"Authorization": "Bearer openreview-secret"},
+    )
+
+    assert data == b"%PDF-1"
+    assert calls[0][0] == "https://arxiv.org/pdf/2608.00001"
+    assert "Authorization" not in calls[0][1]
+
+
 def test_extracts_vector_architecture_above_caption():
     result = extract_architecture_figure(_pdf_with_architecture_caption())
     assert result.status == "READY"
