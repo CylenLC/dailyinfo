@@ -320,8 +320,11 @@ class DataSource(ABC):
         if t == "api":
             return APIDataSource(config, defaults)
         if t == "social":
-            # Lazy import to avoid circular dependency
-            from scripts.social.datasource import SocialDataSource
+            # Lazy import to avoid circular dependency.
+            # Flat import: scripts/ is on sys.path (see cli.py / run_pipelines.py)
+            # and social/datasource.py itself imports `datasource` flat, so the
+            # dotted `scripts.social.datasource` form raises ModuleNotFoundError.
+            from social.datasource import SocialDataSource
 
             return SocialDataSource(
                 config,

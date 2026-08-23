@@ -13,7 +13,6 @@ from scripts.social.agent_reach import (
     ReachCommandRunner,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -70,9 +69,7 @@ class TestReachCommandRunner:
     def test_shell_false_enforced(self, runner, mocker):
         """subprocess.run must be called with shell=False."""
         mock_run = mocker.patch("subprocess.run")
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="ok", stderr=""
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
         runner.run(["agent-reach", "doctor", "--json"])
         call_args = mock_run.call_args
         assert call_args.kwargs.get("shell") is False
@@ -80,9 +77,7 @@ class TestReachCommandRunner:
     def test_no_credentials_in_logs(self, runner, mocker, capsys):
         """Credentials must not appear in subprocess args."""
         mock_run = mocker.patch("subprocess.run")
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="ok", stderr=""
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
         # Simulate a command that should not contain credentials
         runner.run(["twitter", "user-posts", "@karpathy", "-n", "5"])
         call_args = mock_run.call_args
@@ -196,11 +191,44 @@ class TestAgentReachAdapter:
         assert items[0].author_handle == "@karpathy"
         assert items[0].canonical_id == "x:1959234892345678901"
 
+    def test_x_user_posts_compact_format(self, adapter, mocker):
+        """x_user_posts() handles compact JSON format (twitter -c)."""
+        fixture = (
+            Path(__file__).parent
+            / "fixtures"
+            / "social"
+            / "twitter_user_posts_compact.json"
+        )
+        mock_runner = mocker.MagicMock()
+        mock_runner.run.return_value = MagicMock(
+            returncode=0,
+            stdout=fixture.read_text(),
+            stderr="",
+        )
+        adapter.runner = mock_runner
+        adapter._capabilities = ReachCapabilities(
+            agent_reach_version="1.5.0",
+            twitter_available=True,
+            twitter_backend="twitter-cli",
+            opencli_available=False,
+        )
+        items = adapter.x_user_posts("@karpathy", limit=5)
+        assert len(items) == 1
+        assert items[0].author_handle == "@karpathy"
+        assert items[0].canonical_id == "x:2089234892345678901"
+        assert items[0].likes == 100
+        assert items[0].reposts == 20
+
     def test_x_user_posts_fallback_to_opencli(self, adapter, mocker):
         """x_user_posts() falls back to OpenCLI if twitter-cli fails."""
         # twitter-cli fails
         # opencli succeeds
-        opencli_fixture = Path(__file__).parent / "fixtures" / "social" / "opencli_twitter_user_posts.yaml"
+        opencli_fixture = (
+            Path(__file__).parent
+            / "fixtures"
+            / "social"
+            / "opencli_twitter_user_posts.yaml"
+        )
         mock_runner = mocker.MagicMock()
 
         def fake_run(argv, **kwargs):
@@ -248,9 +276,7 @@ class TestAgentReachAdapter:
 
     def test_x_search_success(self, adapter, mocker):
         """x_search() returns SocialItem list on success."""
-        fixture = (
-            Path(__file__).parent / "fixtures" / "social" / "twitter_search.json"
-        )
+        fixture = Path(__file__).parent / "fixtures" / "social" / "twitter_search.json"
         mock_runner = mocker.MagicMock()
         mock_runner.run.return_value = MagicMock(
             returncode=0,
@@ -267,6 +293,106 @@ class TestAgentReachAdapter:
         items = adapter.x_search("AI agents", limit=5)
         assert len(items) == 1
 
+    def test_x_search_requests_latest_tab(self, adapter, mocker):
+        """Search must use `-t latest`, not X's default relevance ranking.
+
+        Regression: without it a niche research phrase returns its all-time
+        best matches (observed 2021-2026 spread for '"streamflow" LSTM'), so a
+        daily briefing window admits almost nothing.
+        """
+        fixture = Path(__file__).parent / "fixtures" / "social" / "twitter_search.json"
+        mock_runner = mocker.MagicMock()
+        mock_runner.run.return_value = MagicMock(
+            returncode=0, stdout=fixture.read_text(), stderr=""
+        )
+        adapter.runner = mock_runner
+        adapter._capabilities = ReachCapabilities(
+            agent_reach_version="1.5.0",
+            twitter_available=True,
+            twitter_backend="twitter-cli",
+            opencli_available=False,
+        )
+
+        adapter.x_search("test query", limit=5)
+
+        argv = mock_runner.run.call_args[0][0]
+        assert argv[argv.index("-t") + 1] == "latest"
+
+    def test_x_timeline_argv_and_parse(self, adapter, mocker):
+        """Timeline uses `feed -t <type>` and drops promoted (ad) tweets."""
+        fixture = Path(__file__).parent / "fixtures" / "social" / "twitter_search.json"
+        mock_runner = mocker.MagicMock()
+        mock_runner.run.return_value = MagicMock(
+            returncode=0, stdout=fixture.read_text(), stderr=""
+        )
+        adapter.runner = mock_runner
+        adapter._capabilities = ReachCapabilities(
+            agent_reach_version="1.5.0",
+            twitter_available=True,
+            twitter_backend="twitter-cli",
+            opencli_available=False,
+        )
+
+        items = adapter.x_timeline(10, feed_type="following")
+
+        argv = mock_runner.run.call_args[0][0]
+        assert "feed" in argv
+        assert argv[argv.index("-t") + 1] == "following"
+        assert "--no-include-promoted" in argv
+        assert "--json" in argv
+        assert len(items) == 1
+
+    def test_x_timeline_retries_once(self, adapter, mocker):
+        """The timeline endpoint is flaky under rate limiting."""
+        mock_runner = mocker.MagicMock()
+        mock_runner.run.return_value = MagicMock(returncode=1, stdout="", stderr="fail")
+        adapter.runner = mock_runner
+        adapter._capabilities = ReachCapabilities(
+            agent_reach_version="1.5.0",
+            twitter_available=True,
+            twitter_backend="twitter-cli",
+            opencli_available=False,
+        )
+
+        assert adapter.x_timeline(10) == []
+        assert mock_runner.run.call_count == 2
+
+    def test_x_list_argv(self, adapter, mocker):
+        """List mode passes the numeric list id through."""
+        fixture = Path(__file__).parent / "fixtures" / "social" / "twitter_search.json"
+        mock_runner = mocker.MagicMock()
+        mock_runner.run.return_value = MagicMock(
+            returncode=0, stdout=fixture.read_text(), stderr=""
+        )
+        adapter.runner = mock_runner
+        adapter._capabilities = ReachCapabilities(
+            agent_reach_version="1.5.0",
+            twitter_available=True,
+            twitter_backend="twitter-cli",
+            opencli_available=False,
+        )
+
+        items = adapter.x_list("1234567890", limit=20)
+
+        argv = mock_runner.run.call_args[0][0]
+        assert "list" in argv
+        assert "1234567890" in argv
+        assert len(items) == 1
+
+    def test_x_timeline_returns_empty_without_twitter(self, adapter, mocker):
+        """No twitter backend means no timeline call at all."""
+        mock_runner = mocker.MagicMock()
+        adapter.runner = mock_runner
+        adapter._capabilities = ReachCapabilities(
+            agent_reach_version="1.5.0",
+            twitter_available=False,
+            twitter_backend=None,
+            opencli_available=False,
+        )
+
+        assert adapter.x_timeline(10) == []
+        assert mock_runner.run.call_count == 0
+
     def test_x_search_with_retry(self, adapter, mocker):
         """x_search() retries twitter-cli once before falling back."""
         fixture = Path(__file__).parent / "fixtures" / "social" / "twitter_search.json"
@@ -277,7 +403,9 @@ class TestAgentReachAdapter:
         def fake_run(argv, **kwargs):
             nonlocal call_count
             call_count += 1
-            if argv[0] == "twitter" and "search" in argv and call_count <= 2:
+            # argv[0] is now an absolute path (resolved via _resolve_bin), so
+            # match on the basename rather than the bare command name.
+            if Path(argv[0]).name == "twitter" and "search" in argv and call_count <= 2:
                 return MagicMock(returncode=1, stdout="", stderr="fail")
             return MagicMock(
                 returncode=0,

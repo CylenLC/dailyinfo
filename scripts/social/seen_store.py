@@ -9,7 +9,7 @@ import pathlib
 from datetime import datetime, timedelta
 from typing import Any
 
-from scripts.social.models import Item, SocialItem
+from social.models import Item, SocialItem, utcnow_naive
 
 _STATE_DIR = pathlib.Path.home() / ".myagentdata" / "dailyinfo" / "state"
 
@@ -17,6 +17,7 @@ _STATE_DIR = pathlib.Path.home() / ".myagentdata" / "dailyinfo" / "state"
 # ---------------------------------------------------------------------------
 # Global social seen store (cross-source dedup)
 # ---------------------------------------------------------------------------
+
 
 class SocialSeenStore:
     """Persistent global seen-state for all social items.
@@ -59,19 +60,23 @@ class SocialSeenStore:
         items = self._data.setdefault("items", {})
         if canonical_id not in items:
             items[canonical_id] = {
-                "first_seen": datetime.utcnow().isoformat(),
+                "first_seen": utcnow_naive().isoformat(),
                 "published_at": (
                     item.published_at.isoformat()
                     if isinstance(item, SocialItem)
                     else item.extra.get("published_at", "")
                 ),
-                "source": item.extra.get("source_ref", "unknown") if isinstance(item, Item) else getattr(item, "source_ref", ""),
+                "source": (
+                    getattr(item, "source_ref", "")
+                    if isinstance(item, SocialItem)
+                    else item.extra.get("source_ref", "unknown")
+                ),
                 "url": item.url,
             }
 
     def prune(self, max_age_days: int = 30) -> int:
         """Remove entries older than max_age_days. Returns count removed."""
-        cutoff = datetime.utcnow() - timedelta(days=max_age_days)
+        cutoff = utcnow_naive() - timedelta(days=max_age_days)
         items = self._data.get("items", {})
         to_remove = []
 
@@ -92,16 +97,29 @@ class SocialSeenStore:
         return len(to_remove)
 
     def commit_items(self, items: list[Item]) -> None:
-        """Record multiple items as seen."""
+        """Record multiple items as seen and persist to disk.
+
+        Falls back to :func:`stable_social_identity` so items without an
+        explicit ``canonical_id`` (URL-only) still get recorded — otherwise
+        they would be re-processed on every run.
+        """
+        recorded = 0
         for item in items:
-            canonical = item.extra.get("canonical_id")
-            if canonical:
-                self.record(canonical, item)
+            identity = stable_social_identity(item)
+            if not identity:
+                continue
+            if identity not in self._data.get("items", {}):
+                recorded += 1
+            self.record(identity, item)
+
+        if recorded:
+            self._save()
 
 
 # ---------------------------------------------------------------------------
 # Per-source identity resolution
 # ---------------------------------------------------------------------------
+
 
 def stable_social_identity(item: Item) -> str:
     """Return stable identity for a social Item.
@@ -140,6 +158,7 @@ def _normalize_social_url(url: str) -> str:
 # ---------------------------------------------------------------------------
 # SocialDataSource override for DataSource
 # ---------------------------------------------------------------------------
+
 
 class SocialDataSourceMixin:
     """Mixin providing stable identity for social sources."""

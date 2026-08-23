@@ -20,11 +20,18 @@ import re
 import sqlite3
 import sys
 import time
+from typing import Any
 
 import requests
 
-from datasource import DataSource, Item, RSSDataSource, build_feed_url_map
-from paths import BRIEFINGS_DIR, FRESHRSS_DATA, PUSHED_DIR, STATE_DIR
+# Ensure scripts/ is on sys.path so `from social...` imports work
+_SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+
+from datasource import DataSource, Item, RSSDataSource, build_feed_url_map  # noqa: E402
+from paths import BRIEFINGS_DIR, FRESHRSS_DATA, PUSHED_DIR, STATE_DIR  # noqa: E402
+from social.models import SocialItem, utcnow_naive  # noqa: E402
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_DIR = os.path.join(PROJECT_ROOT, "config")
@@ -141,6 +148,10 @@ def load_deepseek_key() -> str:
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
+# Single source of truth for the model used when neither the source nor
+# ``defaults`` in config/sources.json specifies one.
+DEFAULT_MODEL = "deepseek-v4-flash"
+
 DEFAULT_FALLBACK_MODEL = "moonshotai/kimi-k2.5"
 
 _BACKOFF_SECONDS = (2, 5, 10)
@@ -176,6 +187,47 @@ def _post_ai(url: str, api_key: str, model: str, prompt: str, max_tokens: int):
     return resp.json()
 
 
+# Reasoning models spend part of the ``max_tokens`` budget on hidden
+# reasoning tokens before emitting any ``content``. A budget sized for
+# content alone yields an empty content + finish_reason="length", so the
+# budget is scaled up for these models.
+_REASONING_BUDGET_MULTIPLIER = 4
+_REASONING_BUDGET_FLOOR = 8000
+
+
+def _is_reasoning_model(model: str) -> bool:
+    """Return True for models that emit hidden reasoning tokens.
+
+    DeepSeek's ``deepseek-v4-*`` family (flash/pro) returns
+    ``reasoning_content`` and bills those tokens against ``max_tokens``.
+    The legacy ``deepseek-chat`` alias routes to the same backend with
+    reasoning disabled, so it is deliberately excluded.
+    """
+    normalised = model.lower()
+    if normalised.startswith("deepseek-v4"):
+        return True
+    return any(
+        marker in normalised for marker in ("reasoner", "-r1", "thinking", "-o1", "-o3")
+    )
+
+
+def _effective_max_tokens(model: str, max_tokens: int) -> int:
+    """Scale the token budget so reasoning models can still emit content."""
+    if not _is_reasoning_model(model):
+        return max_tokens
+    return max(max_tokens * _REASONING_BUDGET_MULTIPLIER, _REASONING_BUDGET_FLOOR)
+
+
+def _extract_completion(data: dict) -> tuple[str, str, int]:
+    """Pull (content, finish_reason, reasoning_chars) out of a chat response."""
+    choice = (data.get("choices") or [{}])[0]
+    message = choice.get("message") or {}
+    finish_reason = choice.get("finish_reason") or "unknown"
+    content = (message.get("content") or "").strip()
+    reasoning = (message.get("reasoning_content") or "").strip()
+    return content, finish_reason, len(reasoning)
+
+
 def _get_deepseek_key() -> str:
     """Load and cache the DeepSeek API key (exits if missing)."""
     global _DEEPSEEK_KEY_CACHE
@@ -187,9 +239,21 @@ def _get_deepseek_key() -> str:
 _DEEPSEEK_KEY_CACHE: str | None = None
 
 
+def _get_openrouter_key() -> str:
+    """Return the OpenRouter key for the fallback provider.
+
+    ``API_KEY`` is only populated by :func:`main`, so importing ``call_ai``
+    from another entry point would otherwise always see an empty key and
+    silently lose the fallback. Resolve from .env / environment on demand.
+    """
+    if API_KEY:
+        return API_KEY
+    return load_api_key()
+
+
 def call_ai(
     prompt: str,
-    model: str = "deepseek-v4-pro",
+    model: str = DEFAULT_MODEL,
     max_tokens: int = 1200,
     *,
     fallback_model: str | None = None,
@@ -199,60 +263,73 @@ def call_ai(
     Strategy: 3 attempts on the primary model via DeepSeek API with
     exponential backoff (2s / 5s / 10s), then up to 2 attempts on
     ``fallback_model`` via OpenRouter.
+
+    ``max_tokens`` is the *content* budget. Reasoning models bill their
+    hidden reasoning tokens against the same budget, so the request is
+    scaled up via :func:`_effective_max_tokens` to leave room for both.
     """
     fallback = _resolve_fallback_model(fallback_model)
     ds_key = _get_deepseek_key()
+    primary_budget = _effective_max_tokens(model, max_tokens)
+    if primary_budget != max_tokens:
+        log(
+            f"  [call_ai] {model} is a reasoning model — "
+            f"max_tokens {max_tokens} -> {primary_budget}"
+        )
 
     # ── Primary: DeepSeek API ──────────────────────────────────────
     for i in range(3):
         try:
-            data = _post_ai(DEEPSEEK_API_URL, ds_key, model, prompt, max_tokens)
+            data = _post_ai(DEEPSEEK_API_URL, ds_key, model, prompt, primary_budget)
         except requests.RequestException as exc:
             log(f"  [call_ai] {model} attempt {i + 1}/3 http_error={exc}")
             time.sleep(_BACKOFF_SECONDS[min(i, len(_BACKOFF_SECONDS) - 1)])
             continue
 
-        choice = (data.get("choices") or [{}])[0]
-        message = choice.get("message") or {}
-        finish_reason = choice.get("finish_reason") or "unknown"
-        content = (message.get("content") or "").strip()
+        content, finish_reason, reasoning_chars = _extract_completion(data)
         if content and finish_reason != "length":
             return content
 
-        reason = (
-            finish_reason or (data.get("error") or {}).get("message") or "empty"
-        )
-        log(
-            f"  [call_ai] {model} attempt {i + 1}/3 incomplete "
-            f"(finish_reason={reason}, chars={len(content)})"
-        )
+        reason = finish_reason or (data.get("error") or {}).get("message") or "empty"
+        detail = f"finish_reason={reason}, chars={len(content)}"
+        if reasoning_chars:
+            detail += f", reasoning_chars={reasoning_chars}"
+        if finish_reason == "length" and not content and reasoning_chars:
+            detail += " (reasoning consumed the whole token budget)"
+        log(f"  [call_ai] {model} attempt {i + 1}/3 incomplete ({detail})")
         time.sleep(_BACKOFF_SECONDS[min(i, len(_BACKOFF_SECONDS) - 1)])
+
+    or_key = _get_openrouter_key()
+    if not or_key:
+        raise BriefingGenerationError(
+            f"call_ai: {model} returned no usable content after 3 attempts and "
+            f"no OPENROUTER_API_KEY is configured, so fallback {fallback} is "
+            f"unavailable (max_tokens={primary_budget})"
+        )
 
     log(f"  [call_ai] primary {model} exhausted, switching to fallback {fallback}")
 
     # ── Fallback: OpenRouter ────────────────────────────────────────
+    fallback_budget = _effective_max_tokens(fallback, max_tokens)
     for i in range(2):
         try:
-            data = _post_ai(OPENROUTER_API_URL, API_KEY, fallback, prompt, max_tokens)
+            data = _post_ai(
+                OPENROUTER_API_URL, or_key, fallback, prompt, fallback_budget
+            )
         except requests.RequestException as exc:
             log(f"  [call_ai] {fallback} attempt {i + 1}/2 http_error={exc}")
             time.sleep(_BACKOFF_SECONDS[min(i, len(_BACKOFF_SECONDS) - 1)])
             continue
 
-        choice = (data.get("choices") or [{}])[0]
-        message = choice.get("message") or {}
-        finish_reason = choice.get("finish_reason") or "unknown"
-        content = (message.get("content") or "").strip()
+        content, finish_reason, reasoning_chars = _extract_completion(data)
         if content and finish_reason != "length":
             return content
 
-        reason = (
-            finish_reason or (data.get("error") or {}).get("message") or "empty"
-        )
-        log(
-            f"  [call_ai] {fallback} attempt {i + 1}/2 incomplete "
-            f"(finish_reason={reason}, chars={len(content)})"
-        )
+        reason = finish_reason or (data.get("error") or {}).get("message") or "empty"
+        detail = f"finish_reason={reason}, chars={len(content)}"
+        if reasoning_chars:
+            detail += f", reasoning_chars={reasoning_chars}"
+        log(f"  [call_ai] {fallback} attempt {i + 1}/2 incomplete ({detail})")
         time.sleep(_BACKOFF_SECONDS[min(i, len(_BACKOFF_SECONDS) - 1)])
 
     raise BriefingGenerationError(
@@ -401,7 +478,7 @@ def _retry_failed_items(
         return []
     log(
         f"    Phase 2: retrying {len(failed_items)} failed articles "
-        f"with conservative settings (batch=3, max_tokens=4000)"
+        f"with conservative settings (batch=3, max_tokens=40000)"
     )
     results: list[tuple[str, list]] = []
     batch_size = 3
@@ -410,7 +487,7 @@ def _retry_failed_items(
         try:
             results.extend(
                 _generate_regular_briefings(
-                    ds, batch, prompt_template, model, max_tokens=4000
+                    ds, batch, prompt_template, model, max_tokens=40000
                 )
             )
         except Exception as e:
@@ -426,9 +503,7 @@ _RE_HIGHLIGHT = re.compile(r"\n🔭 \*\*Today's? Highlight\*\*", re.IGNORECASE)
 _RE_NUMBERED = re.compile(r"^(\d+)\.\s+\*\*", re.MULTILINE)
 
 
-def _merge_briefing_parts(
-    ds, parts: list[tuple[str, list]]
-) -> tuple[str, list]:
+def _merge_briefing_parts(ds, parts: list[tuple[str, list]]) -> tuple[str, list]:
     """Merge multiple briefing parts into one cohesive document.
 
     Strips per-batch headers, renumbers articles sequentially, and
@@ -463,10 +538,12 @@ def _merge_briefing_parts(
 
         # Renumber articles sequentially
         current_num = len(all_items) - len(items)
+
         def _renumber(m):
             nonlocal current_num
             current_num += 1
             return f"{current_num}. **"
+
         article_part = _RE_NUMBERED.sub(_renumber, article_part)
 
         if article_part:
@@ -556,18 +633,21 @@ def _load_sources() -> tuple[dict, dict, dict]:
 # Shared pipeline helpers
 # =====================================================================
 
+
 def _filter_sources(cfg: dict, category: str, *types: str) -> list[dict]:
     """Return enabled sources matching the given category and types."""
     return [
-        s for s in cfg["sources"]
+        s
+        for s in cfg["sources"]
         if s.get("category") == category
         and s.get("type") in types
         and s.get("enabled", True)
     ]
 
 
-def _process_regular_source(ds, feed_cfg: dict, model_default: str,
-                            templates: dict, default_tmpl_key: str) -> int:
+def _process_regular_source(
+    ds, feed_cfg: dict, model_default: str, templates: dict, default_tmpl_key: str
+) -> int:
     """Process a single source: fetch -> batch -> AI -> merge -> save -> commit.
 
     Returns number of files saved (0 or 1).
@@ -585,10 +665,14 @@ def _process_regular_source(ds, feed_cfg: dict, model_default: str,
     if not items:
         log(f"  {name}: 0 new articles - placeholder")
         ds.commit_seen(items)
-        placeholder = f"# {ds.display_name} - {DATE}\n\n" + "\U0001f4ed 过去 {ds.lookback_hours} 小时无新内容\n"
+        placeholder = (
+            f"# {ds.display_name} - {DATE}\n\n"
+            + "\U0001f4ed 过去 {ds.lookback_hours} 小时无新内容\n"
+        )
         save(category, f"{name}_briefing_{DATE}.md", placeholder)
         if isinstance(ds, RSSDataSource):
             from freshrss_cache import record_zero_result
+
             zero_days = record_zero_result(STATE_DIR, name, DATE)
             if zero_days >= 2:
                 log(
@@ -599,10 +683,15 @@ def _process_regular_source(ds, feed_cfg: dict, model_default: str,
 
     if isinstance(ds, RSSDataSource):
         from freshrss_cache import reset_zero_result
+
         reset_zero_result(STATE_DIR, name)
 
-    if ds.lookback_hours > 24 and _already_pushed_within(name, category, ds.lookback_hours):
-        log(f"  {name}: {len(items)} articles - already pushed within {ds.lookback_hours}h, skip")
+    if ds.lookback_hours > 24 and _already_pushed_within(
+        name, category, ds.lookback_hours
+    ):
+        log(
+            f"  {name}: {len(items)} articles - already pushed within {ds.lookback_hours}h, skip"
+        )
         return 0
 
     model = feed_cfg.get("model") or model_default
@@ -616,7 +705,10 @@ def _process_regular_source(ds, feed_cfg: dict, model_default: str,
     total = getattr(ds, "_total_before_filter", len(items))
     new = len(items)
     dup = total - new
-    log(f"  {name}: {new} new articles" + (f" ({dup} duplicates skipped)" if dup else ""))
+    log(
+        f"  {name}: {new} new articles"
+        + (f" ({dup} duplicates skipped)" if dup else "")
+    )
 
     generated_parts: list[tuple[str, list]] = []
     failed_items: list = []
@@ -647,8 +739,9 @@ def _process_regular_source(ds, feed_cfg: dict, model_default: str,
     return 1 if merged_content else 0
 
 
-def _process_deep_content_source(ds, feed_cfg: dict, model_default: str,
-                                 templates: dict) -> int:
+def _process_deep_content_source(
+    ds, feed_cfg: dict, model_default: str, templates: dict
+) -> int:
     """Process a use_content source: one AI call per article, per-article files.
 
     Returns number of files saved.
@@ -671,8 +764,7 @@ def _process_deep_content_source(ds, feed_cfg: dict, model_default: str,
         filename = f"{name}_briefing_{DATE}{suffix}.md"
         try:
             content_text = call_ai(prompt, model=model, max_tokens=2000)
-            save(category, filename,
-                 f"# AI Daily Digest - {DATE}\n\n{content_text}")
+            save(category, filename, f"# AI Daily Digest - {DATE}\n\n{content_text}")
             saved += 1
             committed_items.append(item)
             log(f"    -> saved {filename}")
@@ -692,8 +784,9 @@ def _process_deep_content_source(ds, feed_cfg: dict, model_default: str,
             try:
                 content_text = call_ai(prompt, model=model, max_tokens=3000)
                 filename = f"{name}_briefing_{DATE}_retry{retry_idx}.md"
-                save(category, filename,
-                     f"# AI Daily Digest - {DATE}\n\n{content_text}")
+                save(
+                    category, filename, f"# AI Daily Digest - {DATE}\n\n{content_text}"
+                )
                 saved += 1
                 committed_items.append(item)
                 log(f"    -> saved retry {filename}")
@@ -709,9 +802,9 @@ def _process_deep_content_source(ds, feed_cfg: dict, model_default: str,
     return saved
 
 
-def _run_category_pipeline(category: str, *,
-                           create_marker: bool = False,
-                           deep_content: bool = False) -> int:
+def _run_category_pipeline(
+    category: str, *, create_marker: bool = False, deep_content: bool = False
+) -> int:
     """Generic pipeline for a single category.
 
     Handles both RSS and non-RSS sources. If *create_marker* is True,
@@ -720,7 +813,7 @@ def _run_category_pipeline(category: str, *,
     path is used instead of the regular batched path.
     """
     cfg, defaults, templates = _load_sources()
-    model_default = defaults.get("model", "deepseek-v4-pro")
+    model_default = defaults.get("model", DEFAULT_MODEL)
     default_tmpl_key = defaults.get("prompt_template", "one_line_summary")
 
     # --- RSS sources ---
@@ -754,11 +847,13 @@ def _run_category_pipeline(category: str, *,
                 continue
 
             if deep_content:
-                saved += _process_deep_content_source(ds, feed_cfg, model_default,
-                                                      templates)
+                saved += _process_deep_content_source(
+                    ds, feed_cfg, model_default, templates
+                )
             else:
-                saved += _process_regular_source(ds, feed_cfg, model_default,
-                                                 templates, default_tmpl_key)
+                saved += _process_regular_source(
+                    ds, feed_cfg, model_default, templates, default_tmpl_key
+                )
     finally:
         db.close()
         if create_marker:
@@ -771,8 +866,9 @@ def _run_category_pipeline(category: str, *,
             log(f"    briefing already exists for {DATE}, skip")
             continue
         log(f"  {ds.name}...")
-        saved += _process_regular_source(ds, source_cfg, model_default,
-                                         templates, default_tmpl_key)
+        saved += _process_regular_source(
+            ds, source_cfg, model_default, templates, default_tmpl_key
+        )
 
     return saved
 
@@ -813,7 +909,7 @@ def run_pipeline_arxiv() -> int:
 def run_pipeline_code() -> int:
     log("=== Pipeline 4: Code Trending ===")
     cfg, defaults, templates = _load_sources()
-    model_default = defaults.get("model", "deepseek-v4-pro")
+    model_default = defaults.get("model", DEFAULT_MODEL)
     code_tmpl = templates.get("code_trending", "")
     saved = 0
 
@@ -847,7 +943,7 @@ def run_pipeline_code() -> int:
             continue
 
         if not items:
-            log(f"    no items")
+            log("    no items")
             continue
 
         log(f"    {len(items)} items")
@@ -898,7 +994,14 @@ def run_pipeline_code() -> int:
 # PIPELINE 5: University News (DLUT HTML + API)
 # =====================================================================
 _DLUT_NEWS_GROUP = "dlut_news"
-_DLUT_NEWS_SECTION_ORDER = ["综合新闻", "人才培养", "学术科研", "合作交流", "一线风采", "学院动态"]
+_DLUT_NEWS_SECTION_ORDER = [
+    "综合新闻",
+    "人才培养",
+    "学术科研",
+    "合作交流",
+    "一线风采",
+    "学院动态",
+]
 
 
 def _generate_unified_news(
@@ -908,7 +1011,7 @@ def _generate_unified_news(
     model_default: str,
 ) -> int:
     """Batch-fetch all news-group sources, merge by section, URL-dedup, one AI call."""
-    sections: dict = {}   # section_name -> list[Item]
+    sections: dict = {}  # section_name -> list[Item]
     seen_urls: set = set()
 
     for src in news_sources:
@@ -936,11 +1039,10 @@ def _generate_unified_news(
 
     if total == 0:
         placeholder = (
-            f"# 大连理工大学校园动态 - {DATE}\n\n"
-            f"\U0001f4ed 过去 48 小时无新内容\n"
+            f"# 大连理工大学校园动态 - {DATE}\n\n" f"\U0001f4ed 过去 48 小时无新内容\n"
         )
         save("resource", f"{_DLUT_NEWS_GROUP}_briefing_{DATE}.md", placeholder)
-        log(f"    no updates -> placeholder")
+        log("    no updates -> placeholder")
         return 1
 
     section_parts = []
@@ -973,12 +1075,13 @@ def _generate_unified_news(
 def run_pipeline_resource() -> int:
     log("=== Pipeline 5: University News & Recruitment ===")
     cfg, defaults, prompt_templates = _load_sources()
-    model_default = defaults.get("model", "deepseek-v4-pro")
+    model_default = defaults.get("model", DEFAULT_MODEL)
     saved = 0
 
     # --- Part A: unified news briefing (8 news sources -> 1 file) ---
     news_sources = [
-        s for s in cfg["sources"]
+        s
+        for s in cfg["sources"]
         if s.get("category") == "resource"
         and s.get("news_group") == _DLUT_NEWS_GROUP
         and s.get("enabled", True) is not False
@@ -990,7 +1093,9 @@ def run_pipeline_resource() -> int:
                 f"(use --force {_DLUT_NEWS_GROUP} to regenerate)"
             )
         else:
-            saved += _generate_unified_news(news_sources, defaults, prompt_templates, model_default)
+            saved += _generate_unified_news(
+                news_sources, defaults, prompt_templates, model_default
+            )
 
     # --- Part B: recruitment sources (per-source, logic unchanged) ---
     for source_cfg in cfg["sources"]:
@@ -1025,7 +1130,7 @@ def run_pipeline_resource() -> int:
             )
             save("resource", f"{ds.name}_briefing_{DATE}.md", no_update)
             saved += 1
-            log(f"    no updates -> placeholder")
+            log("    no updates -> placeholder")
             continue
 
         log(f"    {len(items)} items (within {ds.lookback_hours}h)")
@@ -1060,17 +1165,20 @@ def run_pipeline_resource() -> int:
 # PIPELINE 7: Social Intelligence (X/Twitter via Agent-Reach)
 # =====================================================================
 
+
 def run_pipeline_social() -> int:
     """Fetch social media items via Agent-Reach, deduplicate, summarize, save."""
     log("=== Pipeline 7: Social Intelligence ===")
 
     cfg, defaults, templates = _load_sources()
 
-    # Import here to avoid circular dependency
-    from scripts.social.agent_reach import AgentReachAdapter
-    from scripts.social.datasource import SocialDataSource
-    from scripts.social.models import Item, SocialItem
-    from scripts.social.raw_store import SocialRawStore
+    # Import here to avoid circular dependency.
+    # Note: Item/SocialItem come from the module-level imports — importing
+    # social.models.Item here would shadow datasource.Item with a different
+    # (duck-type compatible but distinct) dataclass.
+    from social.agent_reach import AgentReachAdapter
+    from social.datasource import SocialDataSource
+    from social.raw_store import SocialRawStore
 
     reach = AgentReachAdapter()
     capabilities = reach.probe()
@@ -1078,6 +1186,16 @@ def run_pipeline_social() -> int:
     log(f"  Agent Reach {capabilities.agent_reach_version or 'unknown'}")
     if capabilities.twitter_backend:
         log(f"  X backend: {capabilities.twitter_backend}")
+
+    # agent-reach is not a declared dependency (PyPI ships 0.1.0 without the
+    # Twitter channel — see the `social` extra in pyproject.toml). Without it
+    # every source fetches 0 items, so say so loudly instead of reporting a
+    # clean "no new items" run.
+    if not (capabilities.twitter_available or capabilities.opencli_available):
+        log("  WARN: no X/Twitter backend available — all social sources will")
+        log("        return 0 items. Install agent-reach >=1.5 from source:")
+        log("          uv pip install -e /path/to/Agent-Reach")
+        log("        then: dailyinfo social status")
 
     # Load researchers config
     researchers = _load_researchers()
@@ -1091,6 +1209,9 @@ def run_pipeline_social() -> int:
     # 1. Fetch all sources
     fetched_items: dict[str, list[Item]] = {}
     source_metadata: dict[str, dict[str, Any]] = {}
+    # Keep the fetch instances: each one holds the incremental window it used,
+    # which the commit step needs to advance the cursor correctly.
+    datasources: dict[str, SocialDataSource] = {}
 
     for source_cfg in sources:
         ds = SocialDataSource(
@@ -1099,6 +1220,7 @@ def run_pipeline_social() -> int:
             reach=reach,
             researchers=researchers,
         )
+        datasources[ds.name] = ds
 
         log(f"  {ds.name}...")
         try:
@@ -1108,7 +1230,14 @@ def run_pipeline_social() -> int:
                 "status": "success",
                 "fetched": len(items),
             }
-            log(f"    {len(items)} items")
+            window_start, window_end = ds.fetch_window
+            if window_start is not None:
+                log(
+                    f"    window {window_start:%Y-%m-%d %H:%M} -> "
+                    f"{window_end:%H:%M} UTC ({len(items)} items)"
+                )
+            else:
+                log(f"    {len(items)} items")
         except Exception as e:
             log(f"    FETCH ERR: {e}")
             fetched_items[ds.name] = []
@@ -1121,7 +1250,7 @@ def run_pipeline_social() -> int:
 
     # 2. Raw persistence (BEFORE seen filter — never lose data)
     raw_store = SocialRawStore()
-    run_id = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+    run_id = utcnow_naive().strftime("%Y%m%dT%H%M%S")
     raw_dir = None
     try:
         # Convert to SocialItem for raw storage
@@ -1146,7 +1275,10 @@ def run_pipeline_social() -> int:
         log(f"  WARN: raw save failed: {e}")
 
     # 3. Stable seen filter + cross-source dedup
-    filtered_items = _social_filter_and_dedup(fetched_items)
+    source_modes = {
+        cfg_entry["name"]: cfg_entry.get("mode", "search") for cfg_entry in sources
+    }
+    filtered_items = _social_filter_and_dedup(fetched_items, source_modes)
 
     # 4. AI summary per source
     saved = 0
@@ -1157,6 +1289,19 @@ def run_pipeline_social() -> int:
         if not items:
             log(f"    {source_name}: no new items")
             continue
+
+        # Cap items to avoid prompt length issues. Honour the per-source
+        # `max_items` from config/sources.json (both social sources declare 8);
+        # the cap used to be hardcoded, which made that config key dead.
+        max_items = source_cfg.get("max_items", 8)
+        deferred = 0
+        if len(items) > max_items:
+            deferred = len(items) - max_items
+            log(
+                f"    {source_name}: capping {len(items)} items to {max_items} "
+                f"({deferred} deferred to next run)"
+            )
+            items = items[:max_items]
 
         # Format items for prompt
         items_text = _format_social_items(items)
@@ -1174,12 +1319,12 @@ def run_pipeline_social() -> int:
         try:
             content_text = call_ai(
                 prompt,
-                model=source_cfg.get("model", defaults.get("model", "deepseek-v4-flash")),
+                model=source_cfg.get("model", defaults.get("model", DEFAULT_MODEL)),
                 max_tokens=2500,
             )
 
             # Timestamped filename for incremental runs
-            run_ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+            run_ts = utcnow_naive().strftime("%Y%m%dT%H%M%S")
             filename = f"{source_name}_briefing_{DATE}_{run_ts}.md"
             header = f"# {source_cfg.get('display_name', source_name)} - {DATE}\n\n"
 
@@ -1187,21 +1332,46 @@ def run_pipeline_social() -> int:
             saved += 1
             log(f"    -> saved {filename}")
 
-            # Commit seen state only after successful save
-            ds = SocialDataSource(
+            # Commit seen state only after successful save.
+            # Per-source store gates this source's next fetch; the global
+            # store gates every other source (cross-source dedup).
+            # Reuse the fetch instance so the incremental window it recorded is
+            # the one we commit against — building a fresh SocialDataSource here
+            # would have an empty window and could not advance the cursor.
+            ds = datasources.get(source_name) or SocialDataSource(
                 source_cfg,
                 defaults,
                 reach=reach,
                 researchers=researchers,
             )
             ds.commit_seen(items)
-            log(f"    state committed for {source_name}")
+            _commit_social_seen(items)
+            log(f"    state committed for {source_name} ({len(items)} items)")
+
+            # Advance the fetch cursor only when nothing was deferred by the
+            # max_items cap. Deferred items are inside this run's window but
+            # were never committed to the seen store, so moving the cursor past
+            # them would drop them permanently. Holding the cursor lets the next
+            # run re-see them (the seen store suppresses the ones just pushed).
+            if deferred:
+                log(
+                    f"    cursor held for {source_name} "
+                    f"({deferred} items still pending)"
+                )
+            else:
+                ds.commit_fetch_cursor(item_count=len(items))
+                _, window_end = ds.fetch_window
+                if window_end is not None:
+                    log(f"    cursor -> {window_end:%Y-%m-%d %H:%M:%S} UTC")
 
             time.sleep(1)
 
         except Exception as e:
             log(f"    AI/SAVE ERR: {e}")
             # Do NOT commit seen on failure — items will be retried next run
+
+    if saved:
+        _prune_social_seen()
 
     log(f"  Pipeline 7 done: {saved} files saved")
     return saved
@@ -1224,55 +1394,56 @@ def _load_researchers() -> dict:
 
 def _social_filter_and_dedup(
     fetched_items: dict[str, list[Item]],
+    source_modes: dict[str, str] | None = None,
 ) -> dict[str, list[Item]]:
-    """Apply seen filter and cross-source dedup to fetched social items.
+    """Apply the global seen filter and cross-source dedup.
 
-    Cross-source dedup priority: researcher_watch > keyword search.
+    Within a single run the same post can arrive from several sources (e.g.
+    a researcher's tweet also matching a keyword search). The higher-priority
+    source keeps it: ``researcher_watch`` outranks ``search``.
+
+    ``source_modes`` maps source name -> configured ``mode``. When omitted the
+    priority falls back to a name heuristic.
+
+    Note: this only *reads* the global store. Recording happens in
+    :func:`_commit_social_seen` after the briefing is saved, so a failed run
+    retries its items instead of silently dropping them.
     """
-    from scripts.social.seen_store import SocialSeenStore, stable_social_identity
+    from social.seen_store import SocialSeenStore, stable_social_identity
+
+    modes = source_modes or {}
+
+    def source_priority(name: str) -> int:
+        mode = modes.get(name)
+        if mode == "researcher_watch":
+            return 1
+        if mode == "search":
+            return 0
+        if mode:
+            return -1
+        # No config available — fall back to a name heuristic
+        lowered = name.lower()
+        return 1 if ("researcher" in lowered or "watch" in lowered) else 0
 
     global_seen = SocialSeenStore()
     result: dict[str, list[Item]] = {}
+    claimed_in_run: set[str] = set()
 
-    # Process sources in priority order (researcher_watch first)
-    source_priorities = {}
-    for source_name, items in fetched_items.items():
-        # Infer mode from config
-        # Will be filled in below
-        source_priorities[source_name] = 0
-
-    # Sort by priority (researcher_watch=1, search=0, others=-1)
-    sorted_sources = sorted(
-        fetched_items.keys(),
-        key=lambda name: source_priorities.get(name, 0),
-        reverse=True,
-    )
-
-    # Re-sort with actual mode detection
-    # We need to access config, but we don't have it here.
-    # Instead, use heuristic: "researcher_watch" in name → high priority
-    def source_priority(name):
-        if "researcher" in name.lower() or "watch" in name.lower():
-            return 1
-        return 0
-
-    sorted_sources = sorted(
-        fetched_items.keys(),
-        key=source_priority,
-        reverse=True,
-    )
-
-    for source_name in sorted_sources:
-        items = fetched_items[source_name]
+    for source_name in sorted(fetched_items, key=source_priority, reverse=True):
         filtered = []
 
-        for item in items:
+        for item in fetched_items[source_name]:
             identity = stable_social_identity(item)
 
-            # Skip if globally seen (cross-source dedup)
+            # Already committed by an earlier run
             if global_seen.is_seen(identity):
                 continue
 
+            # Already claimed by a higher-priority source in this run
+            if identity in claimed_in_run:
+                continue
+
+            claimed_in_run.add(identity)
             filtered.append(item)
 
         result[source_name] = filtered
@@ -1280,23 +1451,39 @@ def _social_filter_and_dedup(
     return result
 
 
-def _item_to_social(item: "Item") -> "SocialItem":
-    """Best-effort reconstruction of SocialItem from Item."""
-    from scripts.social.models import SocialItem as SI
+def _commit_social_seen(items: list[Item]) -> None:
+    """Record items in the global cross-source store after a successful save."""
+    from social.seen_store import SocialSeenStore
 
+    store = SocialSeenStore()
+    store.commit_items(items)
+
+
+def _prune_social_seen(max_age_days: int = 30) -> None:
+    """Drop global seen entries older than ``max_age_days``."""
+    from social.seen_store import SocialSeenStore
+
+    try:
+        removed = SocialSeenStore().prune(max_age_days=max_age_days)
+        if removed:
+            log(f"  pruned {removed} social seen entries older than {max_age_days}d")
+    except Exception as exc:
+        log(f"  WARN: social seen prune failed: {exc}")
+
+
+def _item_to_social(item: Item) -> SocialItem:
+    """Best-effort reconstruction of SocialItem from Item."""
     extra = item.extra or {}
     engagement = extra.get("engagement", {})
 
     # Parse published_at
     pub_at_str = extra.get("published_at", "")
     try:
-        from datetime import datetime
-
-        pub_at = datetime.fromisoformat(pub_at_str.replace("Z", "+00:00"))
+        pub_at = datetime.datetime.fromisoformat(pub_at_str.replace("Z", "+00:00"))
     except Exception:
-        pub_at = datetime.utcnow()
+        pub_at = utcnow_naive()
 
-    return SI(
+    return SocialItem(
         platform=extra.get("platform", "unknown"),
         item_id=extra.get("item_id", ""),
         author_name=extra.get("author", "Unknown"),
@@ -1457,6 +1644,7 @@ def main() -> int:
         except Exception as e:
             log(f"Pipeline {p} FAILED: {e}")
             import traceback
+
             traceback.print_exc()
 
     log("=== Summary ===")

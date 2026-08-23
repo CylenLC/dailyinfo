@@ -1,7 +1,7 @@
 {
   "version": 2,
   "defaults": {
-    "model": "deepseek-v4-pro",
+    "model": "deepseek-v4-flash",
     "lookback_hours": 24,
     "max_articles_per_batch": 10,
     "freshrss_user": ""
@@ -664,15 +664,17 @@
       "mode": "researcher_watch",
       "watchlist": "ai_ml",
       "category": "social",
-      "enabled": false,
+      "enabled": true,
       "lookback_hours": 24,
       "max_items_per_researcher": 5,
-      "max_items": 30,
+      "max_items": 8,
       "prompt_template": "social_researcher_digest",
       "run_policy": "incremental",
       "backend": {
         "preferred": "twitter_cli",
-        "fallback": ["opencli"]
+        "fallback": [
+          "opencli"
+        ]
       }
     },
     {
@@ -683,21 +685,71 @@
       "platform": "x",
       "mode": "search",
       "queries": [
-        "AI for Science",
-        "earth observation foundation model",
-        "hydrology deep learning",
-        "multimodal earth observation"
+        "\"earth observation\" \"foundation model\"",
+        "\"foundation model\" remote sensing",
+        "\"earth observation\" \"self-supervised\"",
+        "\"streamflow\" LSTM",
+        "\"streamflow prediction\"",
+        "\"machine learning\" \"for science\" arxiv"
       ],
       "category": "social",
-      "enabled": false,
+      "enabled": true,
       "lookback_hours": 24,
+      "max_backfill_hours": 72,
       "max_items_per_query": 10,
-      "max_items": 30,
+      "max_items": 8,
       "prompt_template": "social_search_digest",
       "run_policy": "incremental",
       "backend": {
         "preferred": "twitter_cli",
-        "fallback": ["opencli"]
+        "fallback": [
+          "opencli"
+        ]
+      }
+    },
+    {
+      "name": "x_tech_pulse",
+      "display_name": "X Tech Pulse (Daily Discussion)",
+      "type": "social",
+      "provider": "agent_reach",
+      "platform": "x",
+      "mode": "timeline",
+      "feed_type": "following",
+      "category": "social",
+      "enabled": true,
+      "topic_filter": [
+        "ai",
+        "agent",
+        "llm",
+        "model",
+        "gpu",
+        "datacenter",
+        "data center",
+        "chip",
+        "compute",
+        "robot",
+        "startup",
+        "software",
+        "engineer",
+        "code",
+        "coding",
+        "open source",
+        "research",
+        "science",
+        "energy",
+        "nuclear",
+        "space"
+      ],
+      "min_engagement": 50,
+      "max_items_per_fetch": 60,
+      "max_items": 10,
+      "prompt_template": "social_search_digest",
+      "run_policy": "incremental",
+      "backend": {
+        "preferred": "twitter_cli",
+        "fallback": [
+          "opencli"
+        ]
       }
     }
   ],

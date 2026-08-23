@@ -2,10 +2,9 @@
 
 import json
 import pathlib
-from datetime import datetime
 from typing import Any
 
-from scripts.social.models import SocialItem
+from social.models import SocialItem, utcnow_naive
 
 _RAW_ROOT = pathlib.Path.home() / ".myagentdata" / "dailyinfo" / "raw" / "social"
 
@@ -13,6 +12,7 @@ _RAW_ROOT = pathlib.Path.home() / ".myagentdata" / "dailyinfo" / "raw" / "social
 # ---------------------------------------------------------------------------
 # Raw store
 # ---------------------------------------------------------------------------
+
 
 class SocialRawStore:
     """Persist raw SocialItem batches to raw/social/<date>/<run_id>/."""
@@ -54,7 +54,7 @@ class SocialRawStore:
         manifest = {
             "schema_version": 1,
             "run_id": run_id,
-            "started_at": datetime.utcnow().isoformat(),
+            "started_at": utcnow_naive().isoformat(),
             "agent_reach": {
                 "version": agent_reach_version,
                 "twitter_backend": twitter_backend,
@@ -86,6 +86,7 @@ class SocialRawStore:
 # Serialization
 # ---------------------------------------------------------------------------
 
+
 def _social_item_to_json(item: SocialItem) -> dict[str, Any]:
     """Convert SocialItem to JSON-serializable dict for raw storage."""
     return {
@@ -109,5 +110,5 @@ def _social_item_to_json(item: SocialItem) -> dict[str, Any]:
             "mode": item.source_mode,
             "source": item.source_ref,
         },
-        "fetched_at": datetime.utcnow().isoformat(),
+        "fetched_at": utcnow_naive().isoformat(),
     }

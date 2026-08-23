@@ -6,32 +6,57 @@ Supports:
 """
 
 import json
-import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from scripts.social.models import SocialItem
-
+from social.models import SocialItem, utcnow_naive
 
 # ---------------------------------------------------------------------------
 # Twitter-CLI parsers
 # ---------------------------------------------------------------------------
 
+
 def _parse_twitter_user_posts(raw: str, *, backend: str) -> list[SocialItem]:
-    """Parse `twitter user-posts -n N` JSON output."""
+    """Parse `twitter user-posts -n N` JSON output (compact or full format)."""
     if not raw.strip():
         return []
 
     try:
         data = json.loads(raw)
     except (json.JSONDecodeError, ValueError):
+        # Fallback: try YAML parsing for non-compact output
+        try:
+            import yaml
+
+            parsed = yaml.safe_load(raw)
+            if isinstance(parsed, dict) and "data" in parsed:
+                data = parsed["data"]
+            else:
+                data = parsed
+        except ImportError:
+            return []
+        except Exception:
+            return []
+
+    # Handle both formats:
+    # Compact: [{"id": "...", "author": "@user", "text": "...", ...}]
+    # Full:    [{"id_str": "...", "user": {"name": "...", "screen_name": "..."}, "full_text": "...", ...}]
+    if isinstance(data, dict) and "data" in data:
+        # YAML format: {"ok": true, "data": [...]}
+        tweets = data["data"]
+    elif isinstance(data, list):
+        tweets = data
+    else:
         return []
 
-    if not isinstance(data, list):
+    if not isinstance(tweets, list):
         return []
 
     items = []
-    for tweet in data:
+    for tweet in tweets:
+        if not isinstance(tweet, dict):
+            continue
+
         item = _try_parse_twitter_tweet(tweet, backend=backend, mode="researcher_watch")
         if item:
             items.append(item)
@@ -40,20 +65,41 @@ def _parse_twitter_user_posts(raw: str, *, backend: str) -> list[SocialItem]:
 
 
 def _parse_twitter_search(raw: str, *, backend: str) -> list[SocialItem]:
-    """Parse `twitter search "query" -n N` JSON output."""
+    """Parse `twitter search "query" -n N` JSON output (compact or full format)."""
     if not raw.strip():
         return []
 
     try:
         data = json.loads(raw)
     except (json.JSONDecodeError, ValueError):
+        # Fallback: try YAML parsing for non-compact output
+        try:
+            import yaml
+
+            parsed = yaml.safe_load(raw)
+            if isinstance(parsed, dict) and "data" in parsed:
+                data = parsed["data"]
+            else:
+                data = parsed
+        except ImportError:
+            return []
+        except Exception:
+            return []
+
+    # Handle both formats
+    if isinstance(data, dict) and "data" in data:
+        # YAML format: {"ok": true, "data": [...]}
+        tweets = data["data"]
+    elif isinstance(data, list):
+        tweets = data
+    else:
         return []
 
-    if not isinstance(data, list):
+    if not isinstance(tweets, list):
         return []
 
     items = []
-    for tweet in data:
+    for tweet in tweets:
         item = _try_parse_twitter_tweet(tweet, backend=backend, mode="search")
         if item:
             items.append(item)
@@ -67,34 +113,48 @@ def _try_parse_twitter_tweet(
     backend: str,
     mode: str,
 ) -> SocialItem | None:
-    """Convert a single twitter-cli JSON tweet dict to SocialItem."""
+    """Convert a single twitter-cli JSON tweet dict to SocialItem.
+
+    Supports both compact format (twitter -c) and full format:
+    - Compact: {"id": "...", "author": "@user", "text": "...", "likes": N, "rts": N, "time": "..."}
+    - Full:    {"id_str": "...", "id": ..., "user": {"name": "...", "screen_name": "..."}, "full_text": "...", ...}
+    """
     if not tweet:
         return None
 
+    # Detect format and extract ID
     tweet_id = str(tweet.get("id_str") or tweet.get("id") or "")
     if not tweet_id:
         return None
 
-    # Author
-    user = tweet.get("user", {})
-    author_name = str(user.get("name") or tweet.get("author_name") or "Unknown")
-    author_handle = str(
-        user.get("screen_name")
-        or tweet.get("author_handle")
-        or ""
-    )
-    if author_handle and not author_handle.startswith("@"):
-        author_handle = f"@{author_handle}"
+    # Author — three shapes are supported:
+    #   compact (-c):     "author": "@karpathy"
+    #   twitter-cli v1:   "author": {"name": ..., "screenName": ...}
+    #   legacy full:      "user":   {"name": ..., "screen_name": ...}
+    author_field = tweet.get("author")
+    if isinstance(author_field, str):
+        author_handle = author_field.lstrip("@")
+        author_name = str(tweet.get("author_name") or "Unknown")
+    elif isinstance(author_field, dict):
+        author_name = str(author_field.get("name") or "Unknown")
+        author_handle = str(
+            author_field.get("screenName") or author_field.get("screen_name") or ""
+        )
+    else:
+        user = tweet.get("user") or {}
+        author_name = str(user.get("name") or tweet.get("author_name") or "Unknown")
+        author_handle = str(user.get("screen_name") or tweet.get("author_handle") or "")
 
-    # Text
+    if author_handle:
+        if not author_handle.startswith("@"):
+            author_handle = f"@{author_handle}"
+
+    # Text - handle both formats
     text = str(
-        tweet.get("full_text")
-        or tweet.get("text")
-        or tweet.get("content")
-        or ""
+        tweet.get("full_text") or tweet.get("text") or tweet.get("content") or ""
     )
 
-    # URL
+    # URL - construct if missing
     url = str(
         tweet.get("url")
         or tweet.get("permalink")
@@ -102,15 +162,41 @@ def _try_parse_twitter_tweet(
         or f"https://x.com/i/status/{tweet_id}"
     )
 
-    # Timestamp
-    created_at = tweet.get("created_at") or tweet.get("published_at") or ""
+    # Timestamp. Prefer unambiguous absolute forms; twitter-cli v1 emits
+    # createdAtISO / createdAt, legacy full emits created_at. The compact (-c)
+    # "time" field ("Aug 02 03:00") carries NO YEAR and is only used as a last
+    # resort — see _parse_twitter_timestamp for how the year is inferred.
+    created_at = (
+        tweet.get("createdAtISO")
+        or tweet.get("createdAt")
+        or tweet.get("created_at")
+        or tweet.get("published_at")
+        or tweet.get("time", "")
+    )
     published_at = _parse_twitter_timestamp(created_at)
 
-    # Engagement
-    likes = _safe_int(tweet.get("favorite_count") or tweet.get("likes"))
-    reposts = _safe_int(tweet.get("retweet_count") or tweet.get("reposts"))
-    replies = _safe_int(tweet.get("reply_count") or tweet.get("replies"))
-    quotes = _safe_int(tweet.get("quote_count") or tweet.get("quotes"))
+    # Engagement. twitter-cli v1 nests these under "metrics"; compact output
+    # only carries likes/rts; legacy full uses *_count keys.
+    metrics = tweet.get("metrics") if isinstance(tweet.get("metrics"), dict) else {}
+    likes = _safe_int(
+        metrics.get("likes")
+        or tweet.get("favorite_count")
+        or tweet.get("likes")
+        or tweet.get("like_count")
+    )
+    reposts = _safe_int(
+        metrics.get("retweets")
+        or tweet.get("retweet_count")
+        or tweet.get("retweets")
+        or tweet.get("reposts")
+        or tweet.get("rts")  # compact format uses "rts"
+    )
+    replies = _safe_int(
+        metrics.get("replies") or tweet.get("reply_count") or tweet.get("replies")
+    )
+    quotes = _safe_int(
+        metrics.get("quotes") or tweet.get("quote_count") or tweet.get("quotes")
+    )
 
     return SocialItem(
         platform="x",
@@ -131,36 +217,91 @@ def _try_parse_twitter_tweet(
 
 
 def _parse_twitter_timestamp(ts: str) -> datetime:
-    """Parse Twitter date formats like 'Mon Oct 12 12:34:56 +0000 2026'."""
-    if not ts:
-        return datetime.utcnow()
+    """Parse a Twitter timestamp into **naive UTC**.
 
-    # Try standard Twitter format
-    patterns = [
+    Handles, in order of preference:
+
+    - ``Sun Aug 02 03:00:09 +0000 2026``  (twitter-cli ``createdAt``)
+    - ``2026-08-02T03:00:09Z`` / ``+08:00`` (``createdAtISO``)
+    - ``2026-08-02 03:00:09`` (assumed already UTC)
+    - ``Aug 02 03:00`` (compact ``-c`` output — **no year**, inferred below)
+
+    Returns ``utcnow_naive()`` only when nothing parses. Callers that need to
+    distinguish "unknown time" from "just posted" should use
+    :func:`parse_twitter_timestamp_strict`, which returns ``None`` instead.
+    """
+    parsed = parse_twitter_timestamp_strict(ts)
+    return parsed if parsed is not None else utcnow_naive()
+
+
+def parse_twitter_timestamp_strict(ts: str) -> datetime | None:
+    """Like :func:`_parse_twitter_timestamp` but returns ``None`` on failure.
+
+    Aware timestamps are *converted* to UTC (not merely stripped of tzinfo —
+    that silently shifted any non-``+0000`` offset by hours).
+    """
+    if not ts or not ts.strip():
+        return None
+
+    ts = ts.strip()
+
+    # Absolute formats, all carrying a year.
+    patterns = (
         "%a %b %d %H:%M:%S %z %Y",
         "%a %b %d %H:%M:%S %Z %Y",
+        "%Y-%m-%dT%H:%M:%S.%f%z",
+        "%Y-%m-%dT%H:%M:%S%z",
         "%Y-%m-%dT%H:%M:%S.%fZ",
         "%Y-%m-%dT%H:%M:%SZ",
         "%Y-%m-%d %H:%M:%S",
-    ]
-
+        "%Y-%m-%d %H:%M",
+    )
     for pattern in patterns:
         try:
-            dt = datetime.strptime(ts.strip(), pattern)
-            # Convert to naive UTC
-            if dt.tzinfo:
-                dt = dt.replace(tzinfo=None)
-            return dt
+            dt = datetime.strptime(ts, pattern)
         except ValueError:
             continue
+        return _to_naive_utc(dt)
 
-    # Fallback: now
-    return datetime.utcnow()
+    # ISO 8601 with offset (e.g. "+08:00") that strptime %z rejects on some
+    # Python builds.
+    try:
+        return _to_naive_utc(datetime.fromisoformat(ts.replace("Z", "+00:00")))
+    except ValueError:
+        pass
+
+    # Compact "-c" output: "Aug 02 03:00" — no year. Assume the most recent
+    # occurrence: current year, but if that lands in the future (e.g. parsing
+    # "Dec 30" on Jan 02) it must belong to the previous year.
+    #
+    # The year is injected into the *input* rather than parsed bare and then
+    # .replace()d: parsing a day-without-year is deprecated in 3.13+ and fails
+    # outright on Feb 29.
+    now = utcnow_naive()
+    for pattern in ("%Y %b %d %H:%M", "%Y %b %d"):
+        for year in (now.year, now.year - 1):
+            try:
+                candidate = datetime.strptime(f"{year} {ts}", pattern)
+            except ValueError:
+                continue
+            if candidate <= now + timedelta(days=1):
+                return candidate
+        # Pattern matched but every candidate was in the future — fall through.
+
+    return None
+
+
+def _to_naive_utc(dt: datetime) -> datetime:
+    """Normalize a datetime to naive UTC, converting any offset properly."""
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
 
 
 # ---------------------------------------------------------------------------
 # OpenCLI parsers
 # ---------------------------------------------------------------------------
+
 
 def _parse_opencli_twitter(
     raw: str,
@@ -176,7 +317,9 @@ def _parse_opencli_twitter(
     # Try JSON first
     try:
         data = json.loads(raw)
-        return _parse_opencli_tweets_json(data, backend=backend, handle=handle, query=query)
+        return _parse_opencli_tweets_json(
+            data, backend=backend, handle=handle, query=query
+        )
     except (json.JSONDecodeError, ValueError):
         pass
 
@@ -186,7 +329,9 @@ def _parse_opencli_twitter(
 
         data = yaml.safe_load(raw)
         if isinstance(data, list):
-            return _parse_opencli_tweets_json(data, backend=backend, handle=handle, query=query)
+            return _parse_opencli_tweets_json(
+                data, backend=backend, handle=handle, query=query
+            )
     except ImportError:
         pass
     except Exception:
@@ -226,12 +371,16 @@ def _try_parse_opencli_tweet(
     mode: str,
 ) -> SocialItem | None:
     """Convert a single OpenCLI tweet dict to SocialItem."""
-    tweet_id = str(tweet.get("id") or tweet.get("tweet_id") or tweet.get("id_str") or "")
+    tweet_id = str(
+        tweet.get("id") or tweet.get("tweet_id") or tweet.get("id_str") or ""
+    )
     if not tweet_id:
         return None
 
     # Author
-    author_name = str(tweet.get("author", {}).get("name") or tweet.get("author_name") or "Unknown")
+    author_name = str(
+        tweet.get("author", {}).get("name") or tweet.get("author_name") or "Unknown"
+    )
     author_handle = str(
         tweet.get("author", {}).get("username")
         or tweet.get("author_handle")
@@ -242,7 +391,9 @@ def _try_parse_opencli_tweet(
         author_handle = f"@{author_handle}"
 
     # Text
-    text = str(tweet.get("text") or tweet.get("content") or tweet.get("full_text") or "")
+    text = str(
+        tweet.get("text") or tweet.get("content") or tweet.get("full_text") or ""
+    )
 
     # URL
     url = str(
@@ -258,14 +409,10 @@ def _try_parse_opencli_tweet(
 
     # Engagement (flexible key names)
     likes = _safe_int(
-        tweet.get("favorite_count")
-        or tweet.get("likes")
-        or tweet.get("like_count")
+        tweet.get("favorite_count") or tweet.get("likes") or tweet.get("like_count")
     )
     reposts = _safe_int(
-        tweet.get("retweet_count")
-        or tweet.get("retweets")
-        or tweet.get("repost_count")
+        tweet.get("retweet_count") or tweet.get("retweets") or tweet.get("repost_count")
     )
     replies = _safe_int(tweet.get("reply_count") or tweet.get("replies"))
     quotes = _safe_int(tweet.get("quote_count") or tweet.get("quotes"))
@@ -291,6 +438,7 @@ def _try_parse_opencli_tweet(
 # ---------------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------------
+
 
 def _safe_int(value: Any) -> int | None:
     """Convert to int or return None."""

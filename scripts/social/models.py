@@ -1,8 +1,18 @@
 """Core data models for social intelligence pipeline."""
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
+
+
+def utcnow_naive() -> datetime:
+    """Return current UTC time as naive datetime.
+
+    Replaces deprecated datetime.utcnow() removed in Python 3.13.
+    Returns naive datetime (no tzinfo) to maintain backward compatibility
+    with existing code that expects naive datetimes.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 @dataclass

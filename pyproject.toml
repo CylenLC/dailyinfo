@@ -23,13 +23,26 @@ dev = [
     "black>=24",
     "ruff>=0.4",
     "pytest>=8",
+    "pytest-mock>=3.14",
 ]
 social = [
+    # Pipeline 7 (Twitter/X) needs agent-reach >=1.5 and the twitter-cli it
+    # drives. PyPI only publishes agent-reach 0.1.0 (RSS + YouTube, no Twitter
+    # channel), so both resolve from git via [tool.uv.sources] below.
     "agent-reach>=1.5,<2",
+    "twitter-cli>=0.8.6",
     "pyyaml>=6.0",
 ]
 
 [dependency-groups]
+# `dev` is installed by default by uv sync / uv run.
+# (Replaces the deprecated [tool.uv] dev-dependencies table.)
+dev = [
+    "black>=26.3.1",
+    "ruff>=0.4",
+    "pytest>=9.0.3",
+    "pytest-mock>=3.14",
+]
 docs = [
     "mkdocs>=1.6",
     "mkdocs-material>=9.5",
@@ -42,11 +55,21 @@ dailyinfo = "scripts.cli:cli"
 where = ["."]
 include = ["scripts*"]
 
-[tool.uv]
-dev-dependencies = [
-    "black>=26.3.1",
-    "pytest>=9.0.3",
-]
+[tool.uv.sources]
+# Neither package is installable from PyPI at the version Pipeline 7 needs:
+# agent-reach on PyPI is 0.1.0 (no Twitter channel), and twitter-cli is not
+# published at all. Both are pinned to a branch so `uv lock` records an exact
+# commit; bump with `uv lock --upgrade-package <name>`.
+agent-reach = { git = "https://github.com/Panniantong/Agent-Reach.git", branch = "main" }
+twitter-cli = { git = "https://github.com/CylenLC/twitter-cli.git", branch = "main" }
+
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

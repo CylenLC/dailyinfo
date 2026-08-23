@@ -7,10 +7,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from scripts.datasource import Item
-from scripts.social.datasource import SocialDataSource
-from scripts.social.models import SocialItem
-from scripts.social.seen_store import SocialSeenStore, stable_social_identity
-
+from social.datasource import SocialDataSource
+from social.fetch_cursor import FetchCursorStore
+from social.models import SocialItem, utcnow_naive
+from social.seen_store import SocialSeenStore, stable_social_identity
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -148,7 +148,7 @@ class TestSocialSeenStore:
         # Add an entry with old timestamp
         old_id = "x:old"
         store._data.setdefault("items", {})[old_id] = {
-            "first_seen": (datetime.utcnow() - timedelta(days=40)).isoformat(),
+            "first_seen": (utcnow_naive() - timedelta(days=40)).isoformat(),
             "published_at": "",
             "source": "test",
             "url": "https://x.com/old",
@@ -212,7 +212,9 @@ class TestSocialDataSource:
         )
         assert ds.item_identity(item) == "x:12345"
 
-    def test_fetch_researcher_watch_empty_group(self, base_config, base_defaults, mocker):
+    def test_fetch_researcher_watch_empty_group(
+        self, base_config, base_defaults, mocker
+    ):
         """fetch() returns empty list if no researchers in group."""
         mocker.patch("scripts.social.agent_reach.AgentReachAdapter")
         config = {**base_config, "watchlist": "nonexistent_group"}
@@ -228,7 +230,9 @@ class TestSocialDataSource:
     def test_fetch_researcher_disabled(self, base_config, base_defaults, mocker):
         """Disabled researchers are skipped."""
         mock_reach = mocker.MagicMock()
-        mocker.patch("scripts.social.agent_reach.AgentReachAdapter", return_value=mock_reach)
+        mocker.patch(
+            "scripts.social.agent_reach.AgentReachAdapter", return_value=mock_reach
+        )
 
         researchers = {
             "groups": {
@@ -247,7 +251,9 @@ class TestSocialDataSource:
         assert items == []
         mock_reach.x_user_posts.assert_not_called()
 
-    def test_fetch_researcher_single_failure_does_not_block(self, base_config, base_defaults, mocker):
+    def test_fetch_researcher_single_failure_does_not_block(
+        self, base_config, base_defaults, mocker
+    ):
         """Failure for one researcher doesn't block others."""
         mock_reach = mocker.MagicMock()
 
@@ -257,7 +263,9 @@ class TestSocialDataSource:
             return []
 
         mock_reach.x_user_posts.side_effect = fake_posts
-        mocker.patch("scripts.social.agent_reach.AgentReachAdapter", return_value=mock_reach)
+        mocker.patch(
+            "scripts.social.agent_reach.AgentReachAdapter", return_value=mock_reach
+        )
 
         researchers = {
             "groups": {
@@ -276,7 +284,9 @@ class TestSocialDataSource:
         items = ds.fetch()  # Should not raise
         assert items == []
 
-    def test_fetch_search_multiple_queries_dedup(self, base_config, base_defaults, mocker):
+    def test_fetch_search_multiple_queries_dedup(
+        self, base_config, base_defaults, mocker
+    ):
         """Duplicate items across queries are merged with matched_queries."""
         mock_reach = mocker.MagicMock()
 
@@ -290,13 +300,18 @@ class TestSocialDataSource:
                         author_handle="@author",
                         text="Duplicate content",
                         url="https://x.com/author/status/dup",
-                        published_at=datetime.now(),
+                        # Must be naive UTC: the incremental window compares
+                        # against utcnow_naive(), and datetime.now() is local
+                        # time (8h ahead here), landing outside the window.
+                        published_at=utcnow_naive(),
                     )
                 ]
             return []
 
         mock_reach.x_search.side_effect = fake_search
-        mocker.patch("scripts.social.agent_reach.AgentReachAdapter", return_value=mock_reach)
+        mocker.patch(
+            "scripts.social.agent_reach.AgentReachAdapter", return_value=mock_reach
+        )
 
         config = {
             **base_config,
@@ -313,3 +328,155 @@ class TestSocialDataSource:
         assert len(items) == 1
         # matched_queries should contain both
         assert "AI for Science" in items[0].extra["matched_queries"]
+
+
+class TestIncrementalWindow:
+    """Each run must admit only items newer than the previous fetch.
+
+    Regression: fetching used a fixed ``lookback_hours`` slab, so every run
+    re-considered the same 24h of tweets and relied entirely on the seen store.
+    """
+
+    @staticmethod
+    def _tweet(item_id, published_at):
+        return SocialItem(
+            platform="x",
+            item_id=item_id,
+            author_name="Author",
+            author_handle="@author",
+            text=f"content {item_id}",
+            url=f"https://x.com/author/status/{item_id}",
+            published_at=published_at,
+        )
+
+    def _make_ds(self, tmp_path, mocker, returned, config_extra=None):
+        mock_reach = mocker.MagicMock()
+        mock_reach.x_search.side_effect = lambda query, limit: (
+            returned if query == "q1" else []
+        )
+        mocker.patch(
+            "scripts.social.agent_reach.AgentReachAdapter", return_value=mock_reach
+        )
+        config = {
+            "name": "x_ai_search",
+            "type": "social",
+            "category": "social",
+            "mode": "search",
+            "queries": ["q1"],
+            **(config_extra or {}),
+        }
+        ds = SocialDataSource(
+            config,
+            {"lookback_hours": 24, "model": "stub/model"},
+            reach=mock_reach,
+            cursor_store=FetchCursorStore(path=tmp_path / "cursor.json"),
+        )
+        # Isolate the seen store so dedup cannot mask window behaviour.
+        ds._filter_seen = lambda items: items
+        return ds
+
+    def test_first_run_excludes_yesterday(self, tmp_path, mocker):
+        """No cursor yet: only today's items pass, not a rolling 24h."""
+        now = utcnow_naive()
+        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        ds = self._make_ds(
+            tmp_path,
+            mocker,
+            [
+                self._tweet("yesterday", midnight - timedelta(hours=2)),
+                self._tweet("today", midnight + timedelta(minutes=1)),
+            ],
+        )
+        ids = [i.extra["canonical_id"] for i in ds.fetch()]
+        assert any("today" in i for i in ids)
+        assert not any("yesterday" in i for i in ids)
+
+    def test_second_run_excludes_items_before_cursor(self, tmp_path, mocker):
+        """After committing a cursor, older-than-cursor items are dropped."""
+        now = utcnow_naive()
+        cursor_at = now - timedelta(minutes=30)
+
+        store = FetchCursorStore(path=tmp_path / "cursor.json")
+        store.record_fetch("x_ai_search", cursor_at)
+
+        ds = self._make_ds(
+            tmp_path,
+            mocker,
+            [
+                self._tweet("old", cursor_at - timedelta(minutes=10)),
+                self._tweet("new", cursor_at + timedelta(minutes=10)),
+            ],
+        )
+        ids = [i.extra["canonical_id"] for i in ds.fetch()]
+        assert any("new" in i for i in ids)
+        assert not any("old" in i for i in ids)
+
+    def test_item_posted_during_fetch_is_kept(self, tmp_path, mocker):
+        """window_end is snapshotted pre-call; mid-fetch posts must survive."""
+        ds = self._make_ds(
+            tmp_path,
+            mocker,
+            [self._tweet("mid", utcnow_naive() + timedelta(seconds=30))],
+        )
+        assert len(ds.fetch()) == 1
+
+    def test_commit_advances_cursor_to_window_end(self, tmp_path, mocker):
+        ds = self._make_ds(tmp_path, mocker, [self._tweet("a", utcnow_naive())])
+        ds.fetch()
+        _, window_end = ds.fetch_window
+        ds.commit_fetch_cursor(item_count=1)
+
+        assert ds.cursor_store.last_fetch_at("x_ai_search") == window_end
+
+    def test_fetch_window_is_none_before_fetch(self, tmp_path, mocker):
+        ds = self._make_ds(tmp_path, mocker, [])
+        assert ds.fetch_window == (None, None)
+
+
+class TestHandleValidation:
+    """Invalid handles used to return 0 items silently, forever."""
+
+    def _ds(self, handle, mocker):
+        mock_reach = mocker.MagicMock()
+        mock_reach.x_user_posts.return_value = []
+        mocker.patch(
+            "scripts.social.agent_reach.AgentReachAdapter", return_value=mock_reach
+        )
+        ds = SocialDataSource(
+            {
+                "name": "x_ai_researchers",
+                "type": "social",
+                "category": "social",
+                "mode": "researcher_watch",
+                # Without this the group lookup resolves to "" and bails out
+                # before handle validation is ever reached.
+                "watchlist": "ai_ml",
+            },
+            {"lookback_hours": 24, "model": "stub/model"},
+            reach=mock_reach,
+            researchers={
+                "groups": {"ai_ml": [{"name": "X", "handle": handle, "enabled": True}]}
+            },
+        )
+        return ds, mock_reach
+
+    def test_hyphenated_handle_is_rejected_without_calling_backend(
+        self, mocker, capsys
+    ):
+        """`@szymon-sidor` is not a legal X handle — never worth a network call."""
+        ds, mock_reach = self._ds("@szymon-sidor", mocker)
+        assert ds.fetch() == []
+        mock_reach.x_user_posts.assert_not_called()
+        assert "invalid X handle" in capsys.readouterr().out
+
+    def test_overlong_handle_is_rejected(self, mocker):
+        ds, mock_reach = self._ds("@" + "a" * 16, mocker)
+        assert ds.fetch() == []
+        mock_reach.x_user_posts.assert_not_called()
+
+    def test_valid_handle_reaching_backend_but_empty_warns(self, mocker, capsys):
+        """Valid handle + zero posts is a real signal, not silence."""
+        ds, mock_reach = self._ds("@jasonwei20", mocker)
+        assert ds.fetch() == []
+        mock_reach.x_user_posts.assert_called_once()
+        assert "returned no posts" in capsys.readouterr().out

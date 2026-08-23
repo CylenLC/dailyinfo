@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.social.seen_store import SocialSeenStore
+from social.seen_store import SocialSeenStore
 
 
 class TestSocialSeenStoreIntegration:
@@ -35,18 +35,25 @@ class TestSocialSeenStoreIntegration:
         store = SocialSeenStore(tmp_path / "seen.json")
 
         # Simulate storing from a URL-based item
-        store.record("x.com/karpathy/status/123", _fake_url_item("x.com/karpathy/status/123"))
+        store.record(
+            "x.com/karpathy/status/123", _fake_url_item("x.com/karpathy/status/123")
+        )
 
         # Same tweet with twitter.com
-        assert store.is_seen("twitter.com/karpathy/status/123") is False  # Different key
+        assert (
+            store.is_seen("twitter.com/karpathy/status/123") is False
+        )  # Different key
         # But if normalized first:
-        from scripts.social.seen_store import _normalize_social_url
+        from social.seen_store import _normalize_social_url
 
-        assert _normalize_social_url("https://twitter.com/karpathy/status/123") == "x.com/karpathy/status/123"
+        assert (
+            _normalize_social_url("https://twitter.com/karpathy/status/123")
+            == "x.com/karpathy/status/123"
+        )
 
 
 def _fake_social_item(item_id: str):
-    from scripts.social.models import SocialItem
+    from social.models import SocialItem, utcnow_naive
     from datetime import datetime
 
     return SocialItem(
@@ -56,7 +63,7 @@ def _fake_social_item(item_id: str):
         author_handle="@test",
         text="test",
         url=f"https://x.com/test/status/{item_id}",
-        published_at=datetime.utcnow(),
+        published_at=utcnow_naive(),
     )
 
 

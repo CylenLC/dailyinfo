@@ -4,8 +4,8 @@ from datetime import datetime
 
 import pytest
 
-from scripts.social.models import SocialItem
-from scripts.social.normalize import (
+from social.models import SocialItem, utcnow_naive
+from social.normalize import (
     _parse_opencli_twitter,
     _parse_twitter_search,
     _parse_twitter_user_posts,
@@ -177,7 +177,7 @@ class TestSocialItem:
             author_handle="@a",
             text=long_text,
             url="https://x.com/a/status/1",
-            published_at=datetime.utcnow(),
+            published_at=utcnow_naive(),
         )
         item = social.to_dailyinfo_item("2026-10-12")
         assert len(item.title) < 150
@@ -192,7 +192,7 @@ class TestSocialItem:
             author_handle="@a",
             text="test",
             url="https://x.com/a/status/1",
-            published_at=datetime.utcnow(),
+            published_at=utcnow_naive(),
             likes=None,
             reposts=None,
         )

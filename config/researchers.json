@@ -25,17 +25,10 @@
       },
       {
         "name": "Jason Wei",
-        "handle": "@jasonwei20",
+        "handle": "@_jasonwei",
         "enabled": true,
         "weight": 1.0,
         "topics": ["chain_of_thought", "reasoning"]
-      },
-      {
-        "name": "Szymon Sidor",
-        "handle": "@szymon-sidor",
-        "enabled": true,
-        "weight": 0.8,
-        "topics": ["llm", "multimodal"]
       }
     ],
     "earth_ai": [],
