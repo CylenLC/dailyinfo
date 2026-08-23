@@ -1487,6 +1487,7 @@ def _briefing_prompt(source: str, display_name: str, events: list[dict]) -> str:
             }
         )
     publication_catalog = source.startswith(("cvf_", "acl_", "dblp_", "neurips_"))
+    show_status = source in {"openreview_iclr_2026", "openreview_icml_2026"}
     if publication_catalog:
         for item in payload:
             for key in (
@@ -1497,16 +1498,26 @@ def _briefing_prompt(source: str, display_name: str, events: list[dict]) -> str:
                 item.pop(key, None)
     review_requirements = (
         "4. 该来源只提供正式发表论文元数据和 PDF，不提供评审、录用决定或作者回复；不要输出 Paper Decision、Reviewer 意见、评审统计或 Rebuttal / Author Response。\n"
-        "5. relevance.categories 只表示关键词/Embedding 的检索命中方式；relevance.score 是 Embedding 余弦相似度，不得写成评审评分。"
+        "5. 不要输出 relevance.categories 或 relevance.score。"
         if publication_catalog
-        else "4. 如果存在公开评审，评分必须优先展示 raw_review_ratings 中的原始值，原样保留其数字或标签；归一化统计只能作为补充，不能冒充原始评分。非 OpenReview 来源没有评审时，明确说明未提供公开评审。\n5. relevance.categories 只表示关键词/Embedding 的检索命中方式；relevance.score 是 Embedding 余弦相似度（仅关键词模式时为本地布尔值），不得写成 DeepSeek 或 AI 相关度评分，也不要与 OpenReview 评分混淆。\n6. 单列“Paper Decision”，保留 decision 原始值并结合 decision_text 简要概括；decision 缺失时只写“尚未获取公开决定”。不得从评分猜测论文质量或 Oral/Spotlight。\n7. 单列“Reviewer 意见”，按输入顺序使用“Reviewer 1、Reviewer 2……”逐位概括每名 reviewer 的主要肯定、质疑和问题，并附其原始 rating/confidence；不得合并遗漏。无公开评审则明确说明。meta_reviews 另作领域主席/元评审摘要，不混作 reviewer。\n8. 单列“Rebuttal / Author Response”，逐条概括作者如何回应评审问题；无公开回复则明确说明。不得把作者声明当成已验证事实。"
+        else "4. 如果存在公开评审，评分必须优先展示 raw_review_ratings 中的原始值，原样保留其数字或标签；归一化统计只能作为补充，不能冒充评审评分。非 OpenReview 来源没有评审时，明确说明未提供公开评审。\n5. 不要输出 relevance.categories 或 relevance.score。\n6. 单列“Paper Decision”，保留 decision 原始值并结合 decision_text 简要概括；decision 缺失时只写“尚未获取公开决定”。不得从评分猜测论文质量或 Oral/Spotlight。\n7. 单列“Reviewer 意见”，按输入顺序使用“Reviewer 1、Reviewer 2……”逐位概括每名 reviewer 的主要肯定、质疑和问题，并附其原始 rating/confidence；不得合并遗漏。无公开评审则明确说明。meta_reviews 另作领域主席/元评审摘要，不混作 reviewer。\n8. 单列“Rebuttal / Author Response”，逐条概括作者如何回应评审问题；无公开回复则明确说明。不得把作者声明当成已验证事实。"
+    )
+    metadata_requirements = (
+        "2. 保留会议、作者、论文详情页、PDF 和状态；不要输出检索命中方式、relevance.categories 或 relevance.score；"
+        if show_status
+        else "2. 保留会议、作者、论文详情页、PDF 等正式论文信息；不要输出状态、检索命中方式、relevance.categories 或 relevance.score；"
+    )
+    title_requirement = (
+        "1. 每篇论文一个三级标题，直接使用论文题目；如有状态变化，可在标题后简要标注状态。"
+        if show_status
+        else "1. 每篇论文一个三级标题，直接使用论文题目；不要在标题或正文中输出论文状态。"
     )
     return f"""你是 AI for Science 会议论文编辑。请将以下会议论文结构化事件写成中文 Markdown 简报。
 来源：{display_name}（{source}）
 
 要求：
-1. 每篇论文一个三级标题，直接使用论文题目；如有状态变化，可在标题后简要标注状态。
-2. 保留会议、作者、论文详情页、PDF、状态和检索命中方式；paper.code_url 非空时必须输出“Link To Code”；链接必须使用输入值。
+{title_requirement}
+{metadata_requirements}paper.code_url 非空时必须输出“Link To Code”；链接必须使用输入值。
 3. 每篇论文只用一段话直接介绍研究内容、方法和主要结果；不要输出“为什么值得关注”或类似栏目。DeepSeek 只负责本简报的总结，不参与论文相关度筛选。
 {review_requirements}
 9. 不要输出事件类型、PAPER_DISCOVERED、before/after、输入元数据、数据来源说明、免责声明或内部处理过程；不要添加“以下 N 篇论文……”之类的统一前言或结尾。
@@ -2383,6 +2394,7 @@ def run_conference_source(
     )
 
     page_size = int(config.get("checkpoint", {}).get("page_size", 1000))
+    max_relevant_papers = max(0, int(config.get("max_relevant_papers", 0)))
     if run["phase"] == "DISCOVERY":
         cursor = run.get("cursor_after")
         fetched = int(run.get("fetched_count") or 0)
@@ -2517,6 +2529,12 @@ def run_conference_source(
                 f"scanned={scanned} candidates={candidates} "
                 f"page={page.page_number}"
             )
+            if max_relevant_papers and relevant_during_discovery >= max_relevant_papers:
+                emit(
+                    f"[{display_name}][DISCOVERY] sample limit reached "
+                    f"relevant={relevant_during_discovery}/{max_relevant_papers}"
+                )
+                break
         state.update_run(run_id, phase="RETRIEVAL", message="discovery complete")
         run = state.run(run_id)
 

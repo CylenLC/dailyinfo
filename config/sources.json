@@ -1,7 +1,7 @@
 {
   "version": 2,
   "defaults": {
-    "model": "deepseek-v4-pro",
+    "model": "deepseek-v4-flash",
     "lookback_hours": 24,
     "max_articles_per_batch": 10,
     "freshrss_user": "",
@@ -853,7 +853,7 @@
       "provider": "openreview",
       "venue_id": "AAAI.org/2026/Conference",
       "url": "https://openreview.net/group?id=AAAI.org%2F2026%2FConference",
-      "enabled": true
+      "enabled": false
     },
     {
       "name": "openreview_kdd_2026",
@@ -863,7 +863,7 @@
       "provider": "openreview",
       "venue_id": "KDD.org/2026/Research_Track_August",
       "url": "https://openreview.net/group?id=KDD.org%2F2026%2FResearch_Track_August",
-      "enabled": true
+      "enabled": false
     },
     {
       "name": "openreview_kdd_2026_cycle2",
@@ -873,7 +873,7 @@
       "provider": "openreview",
       "venue_id": "KDD.org/2026/Research_Track_Cycle_2",
       "url": "https://openreview.net/group?id=KDD.org%2F2026%2FResearch_Track_Cycle_2",
-      "enabled": true
+      "enabled": false
     },
     {
       "name": "openreview_cvpr_2026",

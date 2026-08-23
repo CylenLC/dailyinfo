@@ -567,21 +567,22 @@ class CVFOpenAccessProvider(WebConferenceProvider):
             entries.append((forum_id, paper_url, list(dict.fromkeys(authors)), _text(anchor)))
 
         detail_html_by_url: dict[str, str] = {}
-        with ThreadPoolExecutor(max_workers=self.options.detail_workers) as executor:
-            pending = {
-                executor.submit(self._get_text, paper_url, detail=True): paper_url
-                for _forum_id, paper_url, _authors, _title in entries
-            }
-            for future in as_completed(pending):
-                paper_url = pending[future]
-                try:
-                    detail_html_by_url[paper_url] = future.result()
-                except requests.RequestException:
-                    # A single withdrawn/missing CVF detail page must not
-                    # discard the entire conference listing. Keep title and
-                    # authors; the deterministic PDF fallback still permits
-                    # lexical retrieval and a later retry.
-                    detail_html_by_url[paper_url] = ""
+        if not self.config.get("defer_detail_fetch", False):
+            with ThreadPoolExecutor(max_workers=self.options.detail_workers) as executor:
+                pending = {
+                    executor.submit(self._get_text, paper_url, detail=True): paper_url
+                    for _forum_id, paper_url, _authors, _title in entries
+                }
+                for future in as_completed(pending):
+                    paper_url = pending[future]
+                    try:
+                        detail_html_by_url[paper_url] = future.result()
+                    except requests.RequestException:
+                        # A single withdrawn/missing CVF detail page must not
+                        # discard the entire conference listing. Keep title and
+                        # authors; the deterministic PDF fallback still permits
+                        # lexical retrieval and a later retry.
+                        detail_html_by_url[paper_url] = ""
 
         records: list[dict] = []
         for forum_id, paper_url, authors, title in entries:
@@ -613,6 +614,24 @@ class CVFOpenAccessProvider(WebConferenceProvider):
                 }
             )
         return records
+
+    def fetch_forum(
+        self, forum_id: str, _capabilities: VenueCapabilities
+    ) -> tuple[dict | None, list[dict]]:
+        paper = self._papers.get(str(forum_id))
+        if paper is None:
+            return None, []
+        html = self._get_text(str(paper.get("landing_url") or ""), detail=True)
+        soup = BeautifulSoup(html, "html.parser")
+        abstract = _text(soup.find(id="abstract"))
+        if abstract:
+            paper["abstract"] = abstract
+        fallback_pdf = str(paper.get("pdf") or "")
+        paper["pdf"] = paper["pdf_field"] = _first_pdf_url(
+            soup, str(paper.get("landing_url") or ""), fallback_pdf
+        )
+        self._enrich_paper_code_url(paper, detail_html=html)
+        return paper, []
 
 
 class DBLPProvider(WebConferenceProvider):
