@@ -151,6 +151,15 @@ OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 DEFAULT_FALLBACK_MODEL = "moonshotai/kimi-k2.5"
 
+# Reasoning models spend `max_tokens` on chain-of-thought *before* writing the
+# answer. A real 10-article batch measured 1,100-2,800 reasoning tokens on top of
+# ~950 for the briefing body, so the 2,500 budget callers sized for the visible
+# answer truncated intermittently (finish_reason=length). Floor every request:
+# the cap is not prepaid — only generated tokens are billed — whereas a
+# truncation forces a batch split that resends the whole ~41K char prompt, so
+# headroom is strictly cheaper than clipping.
+MIN_COMPLETION_TOKENS = 8000
+
 _BACKOFF_SECONDS = (2, 5, 10)
 
 
@@ -215,6 +224,7 @@ def call_ai(
     """
     fallback = _resolve_fallback_model(fallback_model)
     ds_key = _get_deepseek_key()
+    max_tokens = max(max_tokens, MIN_COMPLETION_TOKENS)
 
     # ── Primary: DeepSeek API ──────────────────────────────────────
     for i in range(3):

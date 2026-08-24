@@ -781,6 +781,34 @@ def test_validate_briefing_content_accepts_closed_bold_mid_sentence():
     rp.validate_briefing_content(content, 1, ["Paper A"])
 
 
+def test_call_ai_floors_max_tokens_for_reasoning_models(monkeypatch):
+    """Budgets sized for the visible answer must leave room for reasoning.
+
+    ``max_tokens`` covers chain-of-thought plus body on reasoning models, so a
+    caller asking for 2500 truncated mid-briefing. Larger explicit budgets
+    (conference passes 50000) must pass through untouched.
+    """
+    import run_pipelines as rp
+
+    sent: list[int] = []
+
+    def fake_post(url, api_key, model, prompt, max_tokens):
+        sent.append(max_tokens)
+        return {
+            "choices": [
+                {"message": {"content": "1. **A**\n   > 摘要。"}, "finish_reason": "stop"}
+            ]
+        }
+
+    monkeypatch.setattr(rp, "_post_ai", fake_post)
+    monkeypatch.setattr(rp, "_get_deepseek_key", lambda: "k")
+
+    rp.call_ai("p", max_tokens=2500)
+    rp.call_ai("p", max_tokens=50000)
+
+    assert sent == [rp.MIN_COMPLETION_TOKENS, 50000]
+
+
 def test_generate_regular_briefings_splits_incomplete_batch(monkeypatch):
     import run_pipelines as rp
     from datasource import Item, RSSDataSource
