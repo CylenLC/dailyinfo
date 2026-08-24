@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-import unicodedata
 from typing import Any, Callable
 
 from datasource import Item
@@ -19,6 +18,8 @@ from embedding_retrieval import (
     LlamaCppEmbeddingClient,
     QwenEmbeddingClient,
 )
+from text_match import normalise_text as _normalise
+from text_match import phrase_matches as _phrase_matches
 
 
 DEFAULT_KEYWORDS = [
@@ -82,23 +83,6 @@ DEFAULT_KEYWORDS = [
     "geospatial",
     "spatial analysis",
 ]
-
-
-def _normalise(value: Any) -> str:
-    text = unicodedata.normalize("NFKC", str(value or "")).casefold()
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def _phrase_matches(text: str, phrase: str) -> bool:
-    phrase = _normalise(phrase)
-    if not phrase:
-        return False
-    plural = (
-        r"(?:s|es)?"
-        if re.fullmatch(r"[a-z]+", phrase) and not phrase.endswith("s")
-        else ""
-    )
-    return re.search(rf"(?<!\w){re.escape(phrase)}{plural}(?!\w)", text) is not None
 
 
 def _field_text(item: Item, field: str) -> str:

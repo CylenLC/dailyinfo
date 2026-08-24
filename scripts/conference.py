@@ -13,7 +13,6 @@ import re
 import sqlite3
 import statistics
 import time
-import unicodedata
 from typing import Any, Callable
 import uuid
 
@@ -29,6 +28,8 @@ from openreview_provider import (
     content_value,
     invitation_matches,
 )
+from text_match import normalise_text as _normalized_text
+from text_match import phrase_matches as _phrase_matches
 
 STATE_SCHEMA_VERSION = 3
 RUN_ACTIVE = "RUNNING"
@@ -111,25 +112,6 @@ def _canonical(value: Any) -> str:
 
 def stable_hash(value: Any) -> str:
     return hashlib.sha256(_canonical(value).encode("utf-8")).hexdigest()
-
-
-def _normalized_text(value: str) -> str:
-    value = unicodedata.normalize("NFKC", value or "").casefold()
-    return re.sub(r"\s+", " ", value).strip()
-
-
-def _phrase_matches(text: str, phrase: str) -> bool:
-    phrase = _normalized_text(phrase)
-    if not phrase:
-        return False
-    # Word boundaries prevent `water` from matching `watermark`; phrases with
-    # punctuation still get escaped and matched literally.
-    plural = (
-        r"(?:s|es)?"
-        if re.fullmatch(r"[a-z]+", phrase) and not phrase.endswith("s")
-        else ""
-    )
-    return re.search(rf"(?<!\w){re.escape(phrase)}{plural}(?!\w)", text) is not None
 
 
 def _retrieval_text(paper: dict) -> str:
