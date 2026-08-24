@@ -105,6 +105,39 @@ def test_disabling_keyword_filter_restores_unfiltered_behavior():
     assert retriever.filter(items).selected == items
 
 
+def test_exclude_phrases_veto_embedding_only_hits():
+    from paper_retrieval import PaperRetriever
+
+    class FakeEmbedding:
+        def score_papers(self, papers):
+            return [0.99] * len(papers)
+
+    retriever = PaperRetriever(
+        {
+            "keyword_filter": {
+                "enabled": True,
+                "mode": "any",
+                "match_fields": ["title", "summary"],
+                "keywords": ["hydrology"],
+            },
+            # Mirrors config/sources.json: both forms are listed because word
+            # boundaries stop "watermark" from matching "watermarking".
+            "filters": {"exclude_phrases": ["watermark", "watermarking"]},
+            "retrieval": {
+                "strategy": "lexical_embedding_union",
+                "threshold": 0.45,
+                "dimension": 32,
+            },
+        },
+        embedding_client=FakeEmbedding(),
+    )
+    selected = retriever.filter(
+        [_item("Robust watermarking for LLMs"), _item("Hydrology forecasting")]
+    )
+
+    assert [item.title for item in selected.selected] == ["Hydrology forecasting"]
+
+
 def test_deduplicate_papers_prefers_first_source_and_arxiv_id():
     from paper_retrieval import deduplicate_papers
 

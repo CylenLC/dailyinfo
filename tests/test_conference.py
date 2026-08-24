@@ -91,6 +91,22 @@ def test_lexical_recall_uses_boundaries_and_domain_method_pair():
     )
 
 
+def test_exclude_phrases_veto_embedding_hits_in_union_retrieval():
+    from conference import EmbeddingRetrievalConfig, _retrieval_decision
+
+    embedding_config = EmbeddingRetrievalConfig(threshold=0.45)
+    decision = _retrieval_decision(
+        lexical_hit=False,
+        embedding_score=0.99,
+        embedding_config=embedding_config,
+        excluded=True,
+    )
+
+    assert decision.relevant is False
+    assert decision.categories == ()
+    assert "excluded_phrase=true" in decision.reason
+
+
 def test_normalize_rating_requires_known_ordered_scale():
     from conference import normalize_rating
 

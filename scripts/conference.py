@@ -132,15 +132,8 @@ def _phrase_matches(text: str, phrase: str) -> bool:
     return re.search(rf"(?<!\w){re.escape(phrase)}{plural}(?!\w)", text) is not None
 
 
-def lexical_recall(paper: dict, filters: dict | None = None) -> bool:
-    """High-recall lexical retrieval seam.
-
-    A future embedding retriever can be combined with this function without
-    changing the retrieval or conference event contracts.
-    """
-
-    filters = filters or {}
-    text = _normalized_text(
+def _retrieval_text(paper: dict) -> str:
+    return _normalized_text(
         " ".join(
             [
                 paper.get("title", ""),
@@ -149,9 +142,34 @@ def lexical_recall(paper: dict, filters: dict | None = None) -> bool:
             ]
         )
     )
+
+
+def excluded_by_filters(paper: dict, filters: dict | None = None) -> bool:
+    """Return True when a paper matches a configured ``exclude_phrases`` entry.
+
+    Exclusion is a hard veto that has to be checked outside the lexical
+    channel: ``_retrieval_decision`` unions lexical and embedding hits, so a
+    paper vetoed here would otherwise be readmitted by a high cosine score.
+    """
+
+    text = _retrieval_text(paper)
+    return any(
+        _phrase_matches(text, phrase)
+        for phrase in (filters or {}).get("exclude_phrases", [])
+    )
+
+
+def lexical_recall(paper: dict, filters: dict | None = None) -> bool:
+    """High-recall lexical retrieval seam.
+
+    A future embedding retriever can be combined with this function without
+    changing the retrieval or conference event contracts.
+    """
+
+    filters = filters or {}
+    text = _retrieval_text(paper)
     include = filters.get("include_phrases", [])
-    exclude = filters.get("exclude_phrases", [])
-    if any(_phrase_matches(text, phrase) for phrase in exclude):
+    if excluded_by_filters(paper, filters):
         return False
     if any(_phrase_matches(text, phrase) for phrase in include):
         return True
@@ -1210,7 +1228,20 @@ def _retrieval_decision(
     lexical_hit: bool,
     embedding_score: float | None,
     embedding_config: EmbeddingRetrievalConfig | None,
+    excluded: bool = False,
 ) -> RelevanceDecision:
+    if excluded:
+        # exclude_phrases vetoes every retrieval channel. Keep the cosine in
+        # the reason string so a surprising drop stays diagnosable.
+        reason = "excluded_phrase=true"
+        if embedding_score is not None:
+            reason += f"; embedding_cosine={embedding_score:.6f}"
+        return RelevanceDecision(
+            relevant=False,
+            score=0.0 if embedding_score is None else float(embedding_score),
+            categories=(),
+            reason=reason,
+        )
     embedding_hit = bool(
         embedding_config is not None
         and embedding_score is not None
@@ -1566,7 +1597,7 @@ def run_conference_source(
             int(run.get("total_expected") or 0) or None,
         ):
             staged: list[dict] = []
-            page_items: list[tuple[dict, str, dict, bool]] = []
+            page_items: list[tuple[dict, str, dict, bool, bool]] = []
             embedding_pending: list[tuple[dict, str]] = []
             for paper in page.papers:
                 forum_id = paper.get("forum_id")
@@ -1574,13 +1605,22 @@ def run_conference_source(
                     continue
                 metadata_hash = _metadata_hash(paper, config)
                 cached = state.paper(source, forum_id)
+                excluded = excluded_by_filters(paper, config.get("filters"))
                 lexical_hit = bool(
                     use_lexical and candidate_retriever(paper, config.get("filters"))
                 )
-                page_items.append((paper, metadata_hash, cached, lexical_hit))
-                if use_embeddings and not (
-                    cached.get("metadata_hash") == metadata_hash
-                    and cached.get("relevance_json")
+                page_items.append(
+                    (paper, metadata_hash, cached, lexical_hit, excluded)
+                )
+                if (
+                    use_embeddings
+                    # Vetoed papers can never become relevant, so skip the
+                    # embedding call entirely rather than scoring and dropping.
+                    and not excluded
+                    and not (
+                        cached.get("metadata_hash") == metadata_hash
+                        and cached.get("relevance_json")
+                    )
                 ):
                     embedding_pending.append((paper, metadata_hash))
 
@@ -1603,7 +1643,7 @@ def run_conference_source(
                     )
                 lexical_hits = {
                     paper["forum_id"]: lexical_hit
-                    for paper, _metadata_hash_value, _cached, lexical_hit in page_items
+                    for paper, _hash, _cached, lexical_hit, _excluded in page_items
                 }
                 for (paper, metadata_hash), score in zip(
                     embedding_pending, scores, strict=True
@@ -1617,9 +1657,21 @@ def run_conference_source(
                     embedding_decisions[forum_id] = decision
                     state.set_relevance(source, forum_id, metadata_hash, decision)
 
-            for paper, metadata_hash, cached, lexical_hit in page_items:
+            for paper, metadata_hash, cached, lexical_hit, excluded in page_items:
                 forum_id = paper["forum_id"]
-                if cached.get("metadata_hash") == metadata_hash and cached.get(
+                if excluded:
+                    # Vetoed by exclude_phrases: record the decision so the
+                    # veto is auditable and the paper is not rescanned.
+                    decision = _retrieval_decision(
+                        lexical_hit=lexical_hit,
+                        embedding_score=None,
+                        embedding_config=embedding_config,
+                        excluded=True,
+                    )
+                    state.set_relevance(source, forum_id, metadata_hash, decision)
+                    stage = "IRRELEVANT"
+                    evaluated_during_discovery += 1
+                elif cached.get("metadata_hash") == metadata_hash and cached.get(
                     "relevance_json"
                 ):
                     cached_relevance = cached["relevance_json"]

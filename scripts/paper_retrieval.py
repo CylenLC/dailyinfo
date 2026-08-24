@@ -115,23 +115,43 @@ def _field_text(item: Item, field: str) -> str:
     return str(item.extra.get(field, "") or "")
 
 
-def matched_keywords(item: Item, config: dict) -> list[str]:
-    """Return configured keyword alternatives that occur in an item."""
-
+def _match_text(item: Item, config: dict) -> str:
     keyword_cfg = config.get("keyword_filter", {}) or {}
     fields = keyword_cfg.get("match_fields", ["title", "summary"])
-    text = _normalise(" ".join(_field_text(item, field) for field in fields))
-    matches: list[str] = []
-    for expression in keyword_cfg.get("keywords", DEFAULT_KEYWORDS):
-        alternatives = [part.strip() for part in str(expression).split("|")]
-        if any(_phrase_matches(text, alternative) for alternative in alternatives):
-            matches.append(str(expression))
+    return _normalise(" ".join(_field_text(item, field) for field in fields))
+
+
+def excluded_by_filters(item: Item, config: dict) -> bool:
+    """Return True when an item matches a configured ``exclude_phrases`` entry.
+
+    Exclusion is a hard veto and must be evaluated independently of the
+    keyword channel: an embedding-only hit is still a retrieval hit, so
+    folding exclusion into the keyword result would let a semantically
+    similar paper re-enter the briefing through the union.
+    """
+
+    text = _match_text(item, config)
     for expression in (config.get("filters", {}) or {}).get("exclude_phrases", []):
         if any(
             _phrase_matches(text, alternative.strip())
             for alternative in str(expression).split("|")
         ):
-            return []
+            return True
+    return False
+
+
+def matched_keywords(item: Item, config: dict) -> list[str]:
+    """Return configured keyword alternatives that occur in an item."""
+
+    if excluded_by_filters(item, config):
+        return []
+    keyword_cfg = config.get("keyword_filter", {}) or {}
+    text = _match_text(item, config)
+    matches: list[str] = []
+    for expression in keyword_cfg.get("keywords", DEFAULT_KEYWORDS):
+        alternatives = [part.strip() for part in str(expression).split("|")]
+        if any(_phrase_matches(text, alternative) for alternative in alternatives):
+            matches.append(str(expression))
     return matches
 
 
@@ -203,6 +223,11 @@ class PaperRetriever:
         if not self.enabled:
             return RetrievalResult(items, {}, {}, 0, 0)
 
+        excluded_keys = {
+            item.url or f"title:{item.title}"
+            for item in items
+            if excluded_by_filters(item, self.config)
+        }
         keyword_matches_by_url = {
             item.url or f"title:{item.title}": matched_keywords(item, self.config)
             for item in items
@@ -245,6 +270,9 @@ class PaperRetriever:
         embedding_count = 0
         for item in items:
             key = item.url or f"title:{item.title}"
+            if key in excluded_keys:
+                # exclude_phrases is a hard veto over every retrieval channel.
+                continue
             keyword_hit = key in keyword_hits
             embedding_hit = bool(
                 self.use_embedding
