@@ -781,15 +781,11 @@ def _process_deep_content_source(ds, feed_cfg: dict, model_default: str,
     return saved
 
 
-def _run_category_pipeline(category: str, *,
-                           create_marker: bool = False,
-                           deep_content: bool = False) -> int:
+def _run_category_pipeline(category: str, *, deep_content: bool = False) -> int:
     """Generic pipeline for a single category.
 
-    Handles both RSS and non-RSS sources. If *create_marker* is True,
-    the arXiv generation marker is created before processing and removed
-    in a finally block. If *deep_content* is True, the smolai use_content
-    path is used instead of the regular batched path.
+    Handles both RSS and non-RSS sources. If *deep_content* is True, the
+    smolai use_content path is used instead of the regular batched path.
     """
     cfg, defaults, templates = _load_sources()
     model_default = defaults.get("model", "deepseek-v4-pro")
@@ -806,9 +802,6 @@ def _run_category_pipeline(category: str, *,
         return 0
     db.row_factory = sqlite3.Row
     full_map, base_map = build_feed_url_map(db)
-
-    if create_marker:
-        _create_arxiv_marker()
 
     try:
         saved = 0
@@ -833,8 +826,6 @@ def _run_category_pipeline(category: str, *,
                                                  templates, default_tmpl_key)
     finally:
         db.close()
-        if create_marker:
-            _remove_arxiv_marker()
 
     # --- Non-RSS sources ---
     for source_cfg in _filter_sources(cfg, category, "scrape", "api"):
