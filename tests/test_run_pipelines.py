@@ -761,6 +761,26 @@ def test_validate_briefing_content_rejects_cutoff_markdown():
         rp.validate_briefing_content("1. **A**\n   > 摘要。\n\n2. **N", 2)
 
 
+def test_validate_briefing_content_accepts_closed_bold_mid_sentence():
+    """A Highlight paragraph may close a bold span and keep writing prose.
+
+    Regression: the old ``\\*\\*[^*\\n]{1,160}$`` probe could not tell an unclosed
+    bold from a closed one followed by more text on the same line, so complete
+    briefings (finish_reason=stop, all items present) were rejected as truncated
+    and needlessly re-sent as split batches.
+    """
+    import run_pipelines as rp
+
+    content = (
+        "1. **Paper A**\n   > 摘要。\n\n"
+        "---\n\n🔭 **Today's Highlight**\n\n"
+        "今日最值得关注的是 **物理信息神经算子** 在水文预测中的系统应用，"
+        "该方向将守恒约束与可学习谱核结合，展示了广泛的适用性。"
+    )
+
+    rp.validate_briefing_content(content, 1, ["Paper A"])
+
+
 def test_generate_regular_briefings_splits_incomplete_batch(monkeypatch):
     import run_pipelines as rp
     from datasource import Item, RSSDataSource

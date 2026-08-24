@@ -293,12 +293,22 @@ def _count_matched_titles(content: str, expected_titles: list[str]) -> int:
     )
 
 
+def _has_unclosed_bold(line: str) -> bool:
+    """Return True when ``line`` opens a bold span it never closes.
+
+    Counting the ``**`` markers is what separates a genuinely truncated
+    ``2. **Half a tit`` from a finished ``... **术语** 的后续说明。``, where the
+    bold is closed and ordinary prose continues on the same line.
+    """
+    return line.count("**") % 2 == 1
+
+
 def _looks_cut_off(content: str) -> bool:
     """Return True for common half-written markdown or sentence endings."""
     stripped = content.strip()
     if not stripped:
         return True
-    if re.search(r"\*\*[^*\n]{1,160}$", stripped):
+    if _has_unclosed_bold(stripped.splitlines()[-1]):
         return True
     if stripped.endswith(("**", "*", "`", "：", ":", "，", ",")):
         return True
