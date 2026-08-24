@@ -784,7 +784,64 @@ class APIDataSource(DataSource):
         cursor_file.write_text(json.dumps(self._pending_cursor))
         self._pending_cursor = None
 
+    def _fetch_hf_daily_papers(self) -> list[Item]:
+        """Fetch one publication day of Hugging Face Daily Papers.
+
+        The bare ``/api/daily_papers`` endpoint returns a rolling,
+        community-ranked board spanning several days, so consecutive runs see
+        largely the same papers and dedup swallows them. Requesting an explicit
+        ``date`` pins the response to that day's page
+        (``huggingface.co/papers/date/YYYY-MM-DD``) instead.
+
+        Hugging Face does not publish on weekends: those dates return HTTP 200
+        with an empty list rather than an error. Walk back to the most recent
+        publishing day so a Saturday/Sunday/Monday run reports Friday's papers
+        instead of silently producing an empty briefing.
+        """
+        headers = dict(self.config.get("headers", {}))
+        headers["User-Agent"] = "DailyInfo-Bot/1.0"
+        params = {k: str(v) for k, v in self.config.get("params", {}).items()}
+
+        configured = str(self.config.get("date") or "").strip()
+        if configured:
+            start = datetime.datetime.strptime(configured, "%Y-%m-%d").date()
+        else:
+            start = NOW.date()
+
+        # A Monday run may still precede the day's publication, so allow enough
+        # steps to clear Sunday + Saturday and land on Friday.
+        max_lookback_days = int(self.config.get("max_lookback_days", 4))
+        attempted: list[str] = []
+        for offset in range(max_lookback_days + 1):
+            day = (start - datetime.timedelta(days=offset)).isoformat()
+            resp = requests.get(
+                self.config["url"],
+                params={**params, "date": day},
+                headers=headers,
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            items = self._parse_hf_daily_papers(data)
+            if items:
+                if offset:
+                    print(
+                        f"  {self.name}: no papers for {'/'.join(attempted)}"
+                        f" (weekend/holiday), using {day}"
+                    )
+                return self._filter_seen(items)
+            attempted.append(day)
+
+        print(
+            f"  {self.name}: no papers found for {'/'.join(attempted)}"
+            f" (searched back {max_lookback_days} days)"
+        )
+        return []
+
     def fetch(self) -> list[Item]:
+        if self.name == "hf_daily_papers":
+            return self._fetch_hf_daily_papers()
+
         method = self.config.get("method", "GET").upper()
         params = self.config.get("params", {})
         if method == "POST":
@@ -801,8 +858,6 @@ class APIDataSource(DataSource):
         resp.raise_for_status()
         data = resp.json()
 
-        if self.name == "hf_daily_papers":
-            return self._filter_seen(self._parse_hf_daily_papers(data))
         if self.name.startswith("huggingface_"):
             return self._filter_seen(self._parse_huggingface(data))
         if self.config.get("parser") == "crossref":

@@ -86,6 +86,131 @@ def test_huggingface_daily_papers_parse_top_percent_and_metadata():
     assert "github.com/example/repo" in items[0].extra["code_url"]
 
 
+def _hf_rows(day: str, count: int = 3) -> list[dict]:
+    return [
+        {
+            "paper": {
+                "id": f"2608.1000{i}",
+                "title": f"Paper {i} on {day}",
+                "summary": f"Summary {i}",
+                "upvotes": i + 1,
+                "submittedOnDailyAt": f"{day}T00:00:00.000Z",
+            }
+        }
+        for i in range(count)
+    ]
+
+
+class _RecordingGet:
+    """Stub for ``requests.get`` returning per-date Daily Papers payloads."""
+
+    def __init__(self, by_date: dict[str, list[dict]]):
+        self.by_date = by_date
+        self.requested: list[str] = []
+
+    def __call__(self, url, params=None, headers=None, timeout=None):
+        day = (params or {})["date"]
+        self.requested.append(day)
+        rows = self.by_date.get(day, [])
+
+        class _Resp:
+            status_code = 200
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return rows
+
+        return _Resp()
+
+
+def _hf_source(tmp_path, monkeypatch, date: str):
+    import datasource
+    from datasource import APIDataSource
+
+    monkeypatch.setattr(datasource, "_STATE_DIR", tmp_path)
+    return APIDataSource(
+        {
+            "name": "hf_daily_papers",
+            "category": "arxiv",
+            "url": "https://huggingface.co/api/daily_papers",
+            "max_items": 10,
+            "top_percent": 100,
+            "date": date,
+        },
+        DEFAULTS,
+    )
+
+
+def test_hf_daily_papers_requests_the_configured_date(tmp_path, monkeypatch):
+    """A weekday must be fetched as that day's page, with no walk-back."""
+    import datasource
+
+    get = _RecordingGet({"2026-08-24": _hf_rows("2026-08-24")})
+    monkeypatch.setattr(datasource.requests, "get", get)
+
+    items = _hf_source(tmp_path, monkeypatch, "2026-08-24").fetch()
+
+    assert get.requested == ["2026-08-24"]
+    assert [it.date for it in items] == ["2026-08-24"] * 3
+
+
+def test_hf_daily_papers_walks_back_over_weekend(tmp_path, monkeypatch):
+    """Weekends return HTTP 200 with an empty list, not an error.
+
+    A Sunday run must land on Friday rather than emit an empty briefing.
+    """
+    import datasource
+
+    get = _RecordingGet(
+        {
+            "2026-08-23": [],  # Sunday
+            "2026-08-22": [],  # Saturday
+            "2026-08-21": _hf_rows("2026-08-21"),  # Friday
+        }
+    )
+    monkeypatch.setattr(datasource.requests, "get", get)
+
+    items = _hf_source(tmp_path, monkeypatch, "2026-08-23").fetch()
+
+    assert get.requested == ["2026-08-23", "2026-08-22", "2026-08-21"]
+    assert [it.date for it in items] == ["2026-08-21"] * 3
+
+
+def test_hf_daily_papers_stops_after_max_lookback(tmp_path, monkeypatch):
+    """An unbroken run of empty days yields no items instead of looping."""
+    import datasource
+
+    get = _RecordingGet({})
+    monkeypatch.setattr(datasource.requests, "get", get)
+
+    src = _hf_source(tmp_path, monkeypatch, "2026-08-23")
+    src.config["max_lookback_days"] = 2
+    items = src.fetch()
+
+    assert items == []
+    assert get.requested == ["2026-08-23", "2026-08-22", "2026-08-21"]
+
+
+def test_hf_daily_papers_walk_back_respects_seen_state(tmp_path, monkeypatch):
+    """Dedup still applies to the day the walk-back settled on."""
+    import datasource
+
+    get = _RecordingGet(
+        {"2026-08-22": [], "2026-08-21": _hf_rows("2026-08-21")}
+    )
+    monkeypatch.setattr(datasource.requests, "get", get)
+
+    src = _hf_source(tmp_path, monkeypatch, "2026-08-22")
+    first = src.fetch()
+    assert len(first) == 3
+    src.commit_seen(first)
+
+    second = _hf_source(tmp_path, monkeypatch, "2026-08-22").fetch()
+    assert second == []
+
+
 def test_huggingface_daily_papers_format_includes_heat_and_summary():
     from datasource import APIDataSource, Item
 
