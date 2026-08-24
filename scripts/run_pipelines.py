@@ -1397,8 +1397,15 @@ def main() -> int:
             log(f'  {d}/: {len(files)} today - {", ".join(files)}')
 
     log(f"Total: {total_saved} files saved")
+    # A crashed or degraded pipeline is a failure no matter how much unrelated
+    # work succeeded. Reporting 0 because some other pipeline saved a file hid
+    # conference breakage from the scheduler on every full run.
+    if failed_pipelines or CONFERENCE_RUN_FAILED:
+        failed = failed_pipelines | ({6} if CONFERENCE_RUN_FAILED else set())
+        log(f"Failed pipelines: {sorted(failed)}")
+        return 1
     if args.pipeline == 6:
-        return 1 if CONFERENCE_RUN_FAILED or 6 in failed_pipelines else 0
+        return 0
     return 0 if total_saved > 0 else 1
 
 

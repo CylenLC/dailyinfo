@@ -48,6 +48,63 @@ def test_pipeline6_main_reports_uncaught_failure(monkeypatch):
     assert rp.main() == 1
 
 
+def test_full_run_reports_failure_even_when_other_pipelines_saved(monkeypatch):
+    """A crashed pipeline must not be masked by unrelated successful work."""
+
+    import run_pipelines as rp
+
+    def fail():
+        raise RuntimeError("openreview exploded")
+
+    monkeypatch.setattr(sys, "argv", ["run_pipelines.py"])
+    monkeypatch.setattr(rp, "load_api_key", lambda: "test-key")
+    monkeypatch.setattr(rp, "CONFERENCE_RUN_FAILED", False)
+    monkeypatch.setattr(rp, "run_pipeline_papers", lambda: 1)
+    for name in ("run_pipeline_ai_news", "run_pipeline_arxiv",
+                 "run_pipeline_code", "run_pipeline_resource"):
+        monkeypatch.setattr(rp, name, lambda: 0)
+    monkeypatch.setattr(rp, "run_pipeline_conference", fail)
+
+    assert rp.main() == 1
+
+
+def test_full_run_reports_degraded_conference_outcome(monkeypatch):
+    """DEGRADED sets no exception, so only the flag surfaces the failure."""
+
+    import run_pipelines as rp
+
+    monkeypatch.setattr(sys, "argv", ["run_pipelines.py"])
+    monkeypatch.setattr(rp, "load_api_key", lambda: "test-key")
+    monkeypatch.setattr(rp, "run_pipeline_papers", lambda: 1)
+    for name in ("run_pipeline_ai_news", "run_pipeline_arxiv",
+                 "run_pipeline_code", "run_pipeline_resource"):
+        monkeypatch.setattr(rp, name, lambda: 0)
+
+    def degraded():
+        rp.CONFERENCE_RUN_FAILED = True
+        return 0
+
+    monkeypatch.setattr(rp, "CONFERENCE_RUN_FAILED", False)
+    monkeypatch.setattr(rp, "run_pipeline_conference", degraded)
+
+    assert rp.main() == 1
+
+
+def test_full_run_succeeds_when_every_pipeline_is_healthy(monkeypatch):
+    import run_pipelines as rp
+
+    monkeypatch.setattr(sys, "argv", ["run_pipelines.py"])
+    monkeypatch.setattr(rp, "load_api_key", lambda: "test-key")
+    monkeypatch.setattr(rp, "CONFERENCE_RUN_FAILED", False)
+    monkeypatch.setattr(rp, "run_pipeline_papers", lambda: 1)
+    for name in ("run_pipeline_ai_news", "run_pipeline_arxiv",
+                 "run_pipeline_code", "run_pipeline_resource",
+                 "run_pipeline_conference"):
+        monkeypatch.setattr(rp, name, lambda: 0)
+
+    assert rp.main() == 0
+
+
 def test_already_pushed_within_detects_recent_file():
     import run_pipelines as rp
     from paths import PUSHED_DIR
