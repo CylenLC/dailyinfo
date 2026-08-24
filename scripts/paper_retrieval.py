@@ -191,10 +191,11 @@ class PaperRetriever:
         if self.strategy not in {"lexical", "qwen3_embedding", "lexical_embedding_union"}:
             raise ValueError(f"unsupported paper retrieval strategy: {self.strategy}")
         self.use_embedding = self.strategy in {"qwen3_embedding", "lexical_embedding_union"}
-        # Explicitly disabling keyword filtering restores the original source
-        # behaviour, including bypassing the embedding filter.
-        if self.keyword_config and not self.keyword_enabled:
-            self.use_embedding = False
+        # Disabling the keyword channel restores the original unfiltered source
+        # behaviour only when no embedding strategy was asked for. An explicit
+        # embedding strategy is honoured on its own: silently dropping it would
+        # turn "semantic retrieval, no keywords" into an unfiltered firehose.
+        if self.keyword_config and not self.keyword_enabled and not self.use_embedding:
             self.strategy = "none"
         self.embedding_config = (
             EmbeddingRetrievalConfig.from_source(config) if self.use_embedding else None

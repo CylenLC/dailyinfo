@@ -93,16 +93,48 @@ def test_union_retrieval_keeps_embedding_only_hits():
 
 
 def test_disabling_keyword_filter_restores_unfiltered_behavior():
+    """Without an embedding strategy, disabling keywords means no filtering."""
+
     from paper_retrieval import PaperRetriever
 
     retriever = PaperRetriever(
         {
             "keyword_filter": {"enabled": False, "keywords": ["hydrology"]},
-            "retrieval": {"strategy": "lexical_embedding_union"},
+            "retrieval": {"strategy": "lexical"},
         }
     )
     items = [_item("Any paper"), _item("Another paper")]
     assert retriever.filter(items).selected == items
+
+
+def test_disabling_keyword_filter_keeps_an_explicit_embedding_strategy():
+    """`enabled: false` must not silently degrade into an unfiltered firehose.
+
+    Asking for a semantic-only strategy while turning the keyword channel off
+    is a reasonable configuration; it has to keep filtering on cosine score.
+    """
+
+    from paper_retrieval import PaperRetriever
+
+    class FakeEmbedding:
+        def score_papers(self, papers):
+            return [0.91 if "river" in p["title"].casefold() else 0.02 for p in papers]
+
+    retriever = PaperRetriever(
+        {
+            "keyword_filter": {"enabled": False, "keywords": ["hydrology"]},
+            "retrieval": {
+                "strategy": "qwen3_embedding",
+                "threshold": 0.45,
+                "dimension": 32,
+            },
+        },
+        embedding_client=FakeEmbedding(),
+    )
+    result = retriever.filter([_item("Unrelated cooking paper"), _item("River routing")])
+
+    assert [item.title for item in result.selected] == ["River routing"]
+    assert result.embedding_count == 1
 
 
 def test_exclude_phrases_veto_embedding_only_hits():
