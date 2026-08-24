@@ -36,6 +36,11 @@ DATE = datetime.datetime.now().strftime("%Y-%m-%d")
 
 API_KEY = ""
 
+# Running total of prompt characters sent to the AI this process, logged per
+# run so heavy days are attributable. Nothing throttles on it: batching is
+# capped by max_batches only, so cost stays observable rather than bounded.
+AI_PROMPT_CHARS: int = 0
+
 
 def _get_freshrss_user() -> str:
     env_path = os.path.join(PROJECT_ROOT, ".env")
@@ -348,7 +353,9 @@ def _generate_regular_briefings(
     Returns list of (content, batch_items) tuples so callers can track which
     items were successfully processed for commit_seen.
     """
+    global AI_PROMPT_CHARS
     prompt = _build_regular_prompt(prompt_template, ds, batch)
+    AI_PROMPT_CHARS += len(prompt)
     try:
         content = call_ai(prompt, model=model, max_tokens=max_tokens)
         validate_briefing_content(content, len(batch), [item.title for item in batch])
@@ -1388,6 +1395,8 @@ def main() -> int:
             log(f'  {d}/: {len(files)} today - {", ".join(files)}')
 
     log(f"Total: {total_saved} files saved")
+    if AI_PROMPT_CHARS:
+        log(f"AI prompt volume: {AI_PROMPT_CHARS:,} chars (~{AI_PROMPT_CHARS // 4:,} tokens)")
     # A crashed or degraded pipeline is a failure no matter how much unrelated
     # work succeeded. Reporting 0 because some other pipeline saved a file hid
     # conference breakage from the scheduler on every full run.

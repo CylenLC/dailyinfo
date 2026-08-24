@@ -68,6 +68,34 @@ def test_full_run_reports_failure_even_when_other_pipelines_saved(monkeypatch):
     assert rp.main() == 1
 
 
+def test_prompt_volume_is_tallied_without_capping_batches(monkeypatch):
+    """Cost is observable, never bounded: every batch still gets summarized."""
+
+    import run_pipelines as rp
+    from datasource import Item
+
+    sent: list[int] = []
+    monkeypatch.setattr(rp, "call_ai", lambda prompt, **kw: sent.append(len(prompt)) or "ok")
+    monkeypatch.setattr(rp, "validate_briefing_content", lambda *a, **k: None)
+    monkeypatch.setattr(rp, "log", lambda *a, **k: None)
+    monkeypatch.setattr(rp, "AI_PROMPT_CHARS", 0)
+
+    class Stub:
+        name = display_name = "arxiv_cs_ai"
+        config: dict = {}
+
+        def format_items(self, items):
+            return "\n".join(item.title for item in items)
+
+    items = [Item(title=f"Paper {i}", date="2026-08-24", content="x" * 2000)
+             for i in range(3)]
+    for _ in range(2):
+        rp._generate_regular_briefings(Stub(), items, "{count} {article_list}", "m")
+
+    assert len(sent) == 2, "no batch may be dropped to save tokens"
+    assert rp.AI_PROMPT_CHARS == sum(sent)
+
+
 def test_full_run_reports_degraded_conference_outcome(monkeypatch):
     """DEGRADED sets no exception, so only the flag surfaces the failure."""
 
