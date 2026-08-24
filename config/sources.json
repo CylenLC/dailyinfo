@@ -330,6 +330,13 @@
       "max_batches": 50,
       "url": "https://rss.arxiv.org/rss/cs.AI",
       "type": "rss",
+      "filters": {
+        "version": 2,
+        "exclude_phrases": [
+          "watermark",
+          "watermarking"
+        ]
+      },
       "keyword_filter": {
         "enabled": true,
         "mode": "any",
