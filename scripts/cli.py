@@ -28,9 +28,9 @@ _SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
-import click
+import click  # noqa: E402
 
-from paths import (
+from paths import (  # noqa: E402
     BRIEFINGS_DIR,
     CURRENT_ENV,
     FRESHRSS_DATA,
@@ -39,7 +39,7 @@ from paths import (
     WORKSPACE_ROOT,
 )
 
-from clean_cache import clean_stale_cache
+from clean_cache import clean_stale_cache  # noqa: E402
 
 SCRIPTS_DIR = Path(__file__).parent.resolve()
 PROJECT_ROOT = SCRIPTS_DIR.parent
