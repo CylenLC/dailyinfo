@@ -83,6 +83,10 @@ class EmbeddingRetrievalConfig:
     dimension: int = 512
     threshold: float = 0.45
     batch_size: int = 2
+    # Only the qwen_fastapi/transformers backends honour max_length: it is sent
+    # in the request payload and the service truncates there.  llama.cpp's
+    # /v1/embeddings has no such knob, so under backend="llama_cpp" this value
+    # is accepted and ignored -- truncation is whatever the served model does.
     max_length: int = 1024
     timeout_seconds: int = 300
 
