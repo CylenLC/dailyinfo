@@ -387,6 +387,42 @@ def test_process_regular_source_resets_zero_state_when_rss_recovers(
     assert not (STATE_DIR / "arxiv_cs_ai_zero_state.json").exists()
 
 
+def test_process_regular_source_skips_zero_state_when_retrieval_rejected_all(
+    rss_db, monkeypatch
+):
+    """A fully-rejected feed page is not evidence that FreshRSS is stuck."""
+
+    import run_pipelines as rp
+    from datasource import RSSDataSource
+    from paths import STATE_DIR
+
+    ds = RSSDataSource(
+        {
+            "name": "arxiv_cs_ai",
+            "type": "rss",
+            "category": "arxiv",
+            "url": "https://rss.arxiv.org/rss/cs.AI",
+        },
+        {},
+        db=rss_db,
+    )
+
+    saved = rp._process_regular_source(
+        ds,
+        ds.config,
+        "deepseek-v4-pro",
+        {"one_line_summary": "summarize {article_list}"},
+        "one_line_summary",
+        fetched_items=[],
+        commit_items=[],
+        items_are_filtered=True,
+        fetched_before_filter=50,
+    )
+
+    assert saved == 1
+    assert not (STATE_DIR / "arxiv_cs_ai_zero_state.json").exists()
+
+
 def test_arxiv_pipeline_deduplicates_hf_and_rss_before_summarizing(
     tmp_path, monkeypatch
 ):

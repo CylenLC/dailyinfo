@@ -604,8 +604,14 @@ def _process_regular_source(ds, feed_cfg: dict, model_default: str,
                             templates: dict, default_tmpl_key: str,
                             *, fetched_items: list | None = None,
                             commit_items: list | None = None,
-                            items_are_filtered: bool = False) -> int:
+                            items_are_filtered: bool = False,
+                            fetched_before_filter: int | None = None) -> int:
     """Process a single source: fetch -> batch -> AI -> merge -> save -> commit.
+
+    ``fetched_before_filter`` carries the number of entries the source returned
+    *before* retrieval ran. Callers that pre-filter (the arXiv pipeline) must
+    pass it, otherwise a fully-rejected page is indistinguishable from a feed
+    that returned nothing and would trip the FreshRSS "stuck cache" heuristic.
 
     Returns number of files saved (0 or 1).
     """
@@ -633,6 +639,8 @@ def _process_regular_source(ds, feed_cfg: dict, model_default: str,
             log(f"    RETRIEVAL ERR: {e}")
             return 0
     commit_pool = commit_items if commit_items is not None else default_commit_items
+    if fetched_before_filter is None:
+        fetched_before_filter = len(raw_items)
 
     if not items:
         log(f"  {name}: 0 relevant new articles - placeholder")
@@ -643,7 +651,7 @@ def _process_regular_source(ds, feed_cfg: dict, model_default: str,
         if isinstance(ds, RSSDataSource):
             from freshrss_cache import record_zero_result
             from freshrss_cache import reset_zero_result
-            if raw_items:
+            if fetched_before_filter:
                 # The feed returned entries, but retrieval rejected all of
                 # them; this is not evidence that FreshRSS is stuck.
                 reset_zero_result(STATE_DIR, name)
@@ -882,7 +890,7 @@ def run_pipeline_arxiv() -> int:
 
         _create_arxiv_marker()
         seen_identities: set[str] = set()
-        records: list[tuple[object, dict, list, list]] = []
+        records: list[tuple[object, dict, list, list, int]] = []
         source_cfgs = _filter_sources(cfg, "arxiv", "rss", "api", "scrape")
         # Community-ranked HF items win when the same paper is also present in
         # the RSS feed; the arXiv channel still retains all unique RSS hits.
@@ -911,14 +919,16 @@ def run_pipeline_arxiv() -> int:
                 duplicate_count = len(selected) - len(unique_selected)
                 if duplicate_count:
                     log(f"  {name}: removed {duplicate_count} cross-source duplicates")
-                records.append((ds, source_cfg, unique_selected, commit_pool))
+                records.append(
+                    (ds, source_cfg, unique_selected, commit_pool, len(raw_items))
+                )
             except Exception as exc:
                 log(f"    FETCH/RETRIEVAL ERR: {exc}")
                 placeholder = f"# {ds.display_name} - {DATE}\n\n⚠️ 获取或筛选失败\n"
                 save(category, f"{name}_briefing_{DATE}.md", placeholder)
                 saved += 1
 
-        for ds, source_cfg, items, commit_pool in records:
+        for ds, source_cfg, items, commit_pool, fetched_count in records:
             saved += _process_regular_source(
                 ds,
                 source_cfg,
@@ -928,6 +938,7 @@ def run_pipeline_arxiv() -> int:
                 fetched_items=items,
                 commit_items=commit_pool,
                 items_are_filtered=True,
+                fetched_before_filter=fetched_count,
             )
     finally:
         if db is not None:
