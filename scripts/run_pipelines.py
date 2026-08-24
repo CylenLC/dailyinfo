@@ -644,6 +644,10 @@ def _process_regular_source(ds, feed_cfg: dict, model_default: str,
     """
     name, category = ds.name, ds.category
 
+    if ds.skips_today():
+        log(f"  {name}: {ds.target_date()} 是周末，本源不发布，跳过")
+        return 0
+
     if fetched_items is None:
         try:
             raw_items = ds.fetch()
@@ -930,6 +934,9 @@ def run_pipeline_arxiv() -> int:
                 full_map=full_map,
                 base_map=base_map,
             )
+            if ds.skips_today():
+                log(f"  {name}: {ds.target_date()} 是周末，本源不发布，跳过")
+                continue
             log(f"  {name}...")
             try:
                 raw_items = ds.fetch()

@@ -135,7 +135,6 @@ def _hf_source(tmp_path, monkeypatch, date: str):
             "name": "hf_daily_papers",
             "category": "arxiv",
             "url": "https://huggingface.co/api/daily_papers",
-            "max_items": 10,
             "top_percent": 100,
             "date": date,
         },
@@ -144,71 +143,45 @@ def _hf_source(tmp_path, monkeypatch, date: str):
 
 
 def test_hf_daily_papers_requests_the_configured_date(tmp_path, monkeypatch):
-    """A weekday must be fetched as that day's page, with no walk-back."""
+    """A weekday is fetched as that day's page, keeping every paper."""
     import datasource
 
-    get = _RecordingGet({"2026-08-24": _hf_rows("2026-08-24")})
+    get = _RecordingGet({"2026-08-24": _hf_rows("2026-08-24", 26)})
     monkeypatch.setattr(datasource.requests, "get", get)
 
     items = _hf_source(tmp_path, monkeypatch, "2026-08-24").fetch()
 
     assert get.requested == ["2026-08-24"]
-    assert [it.date for it in items] == ["2026-08-24"] * 3
+    assert len(items) == 26  # no max_items cap
+    assert {it.date for it in items} == {"2026-08-24"}
 
 
-def test_hf_daily_papers_walks_back_over_weekend(tmp_path, monkeypatch):
-    """Weekends return HTTP 200 with an empty list, not an error.
-
-    A Sunday run must land on Friday rather than emit an empty briefing.
-    """
-    import datasource
-
-    get = _RecordingGet(
-        {
-            "2026-08-23": [],  # Sunday
-            "2026-08-22": [],  # Saturday
-            "2026-08-21": _hf_rows("2026-08-21"),  # Friday
-        }
-    )
-    monkeypatch.setattr(datasource.requests, "get", get)
-
-    items = _hf_source(tmp_path, monkeypatch, "2026-08-23").fetch()
-
-    assert get.requested == ["2026-08-23", "2026-08-22", "2026-08-21"]
-    assert [it.date for it in items] == ["2026-08-21"] * 3
-
-
-def test_hf_daily_papers_stops_after_max_lookback(tmp_path, monkeypatch):
-    """An unbroken run of empty days yields no items instead of looping."""
+def test_hf_daily_papers_skips_weekend_without_requesting(tmp_path, monkeypatch):
+    """Hugging Face publishes Mon-Fri; weekends cost no request and yield none."""
     import datasource
 
     get = _RecordingGet({})
     monkeypatch.setattr(datasource.requests, "get", get)
 
-    src = _hf_source(tmp_path, monkeypatch, "2026-08-23")
-    src.config["max_lookback_days"] = 2
-    items = src.fetch()
+    for weekend_day in ("2026-08-22", "2026-08-23"):  # Saturday, Sunday
+        assert _hf_source(tmp_path, monkeypatch, weekend_day).fetch() == []
 
-    assert items == []
-    assert get.requested == ["2026-08-23", "2026-08-22", "2026-08-21"]
+    assert get.requested == []
 
 
-def test_hf_daily_papers_walk_back_respects_seen_state(tmp_path, monkeypatch):
-    """Dedup still applies to the day the walk-back settled on."""
+def test_hf_daily_papers_respects_seen_state(tmp_path, monkeypatch):
+    """A same-day rerun must not re-emit papers already committed."""
     import datasource
 
-    get = _RecordingGet(
-        {"2026-08-22": [], "2026-08-21": _hf_rows("2026-08-21")}
-    )
+    get = _RecordingGet({"2026-08-21": _hf_rows("2026-08-21")})
     monkeypatch.setattr(datasource.requests, "get", get)
 
-    src = _hf_source(tmp_path, monkeypatch, "2026-08-22")
+    src = _hf_source(tmp_path, monkeypatch, "2026-08-21")
     first = src.fetch()
     assert len(first) == 3
     src.commit_seen(first)
 
-    second = _hf_source(tmp_path, monkeypatch, "2026-08-22").fetch()
-    assert second == []
+    assert _hf_source(tmp_path, monkeypatch, "2026-08-21").fetch() == []
 
 
 def test_huggingface_daily_papers_format_includes_heat_and_summary():

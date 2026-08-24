@@ -427,7 +427,7 @@
       "enabled": true,
       "type": "api",
       "url": "https://huggingface.co/api/daily_papers",
-      "max_items": 10,
+      "weekdays_only": true,
       "top_percent": 100,
       "max_articles_per_batch": 10
     },

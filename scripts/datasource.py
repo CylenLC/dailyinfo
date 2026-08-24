@@ -297,6 +297,24 @@ class DataSource(ABC):
     def commit_cursor(self) -> None:
         """Persist cursor after a successful briefing save. No-op for most sources."""
 
+    def target_date(self) -> datetime.date:
+        """The publication day this run targets: config ``date`` or today."""
+        configured = str(self.config.get("date") or "").strip()
+        if configured:
+            return datetime.datetime.strptime(configured, "%Y-%m-%d").date()
+        return NOW.date()
+
+    def skips_today(self) -> bool:
+        """True when a ``weekdays_only`` source lands on Saturday/Sunday.
+
+        Such sources have no weekend edition, so the run must produce nothing
+        at all — not even a placeholder, which push relays to Discord as a
+        "no updates" notice.
+        """
+        return bool(self.config.get("weekdays_only")) and (
+            self.target_date().weekday() >= 5
+        )
+
     @staticmethod
     def create(config: dict, defaults: dict, **ctx) -> "DataSource":
         """Factory: instantiate the correct subclass for config['type']."""
@@ -793,50 +811,31 @@ class APIDataSource(DataSource):
         ``date`` pins the response to that day's page
         (``huggingface.co/papers/date/YYYY-MM-DD``) instead.
 
-        Hugging Face does not publish on weekends: those dates return HTTP 200
-        with an empty list rather than an error. Walk back to the most recent
-        publishing day so a Saturday/Sunday/Monday run reports Friday's papers
-        instead of silently producing an empty briefing.
+        Hugging Face publishes Monday to Friday only; weekend dates return
+        HTTP 200 with an empty list rather than an error. ``weekdays_only``
+        skips those days upstream (see ``DataSource.skips_today``), so this
+        only guards against an explicitly configured weekend ``date``.
+        Seen-state dedup still applies, so a same-day rerun cannot re-push
+        papers already sent.
         """
-        headers = dict(self.config.get("headers", {}))
-        headers["User-Agent"] = "DailyInfo-Bot/1.0"
+        day = self.target_date()
+        if day.weekday() >= 5:
+            print(f"  {self.name}: {day} is a weekend, no papers published")
+            return []
+
+        headers = {
+            **self.config.get("headers", {}),
+            "User-Agent": "DailyInfo-Bot/1.0",
+        }
         params = {k: str(v) for k, v in self.config.get("params", {}).items()}
-
-        configured = str(self.config.get("date") or "").strip()
-        if configured:
-            start = datetime.datetime.strptime(configured, "%Y-%m-%d").date()
-        else:
-            start = NOW.date()
-
-        # A Monday run may still precede the day's publication, so allow enough
-        # steps to clear Sunday + Saturday and land on Friday.
-        max_lookback_days = int(self.config.get("max_lookback_days", 4))
-        attempted: list[str] = []
-        for offset in range(max_lookback_days + 1):
-            day = (start - datetime.timedelta(days=offset)).isoformat()
-            resp = requests.get(
-                self.config["url"],
-                params={**params, "date": day},
-                headers=headers,
-                timeout=30,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            items = self._parse_hf_daily_papers(data)
-            if items:
-                if offset:
-                    print(
-                        f"  {self.name}: no papers for {'/'.join(attempted)}"
-                        f" (weekend/holiday), using {day}"
-                    )
-                return self._filter_seen(items)
-            attempted.append(day)
-
-        print(
-            f"  {self.name}: no papers found for {'/'.join(attempted)}"
-            f" (searched back {max_lookback_days} days)"
+        resp = requests.get(
+            self.config["url"],
+            params={**params, "date": day.isoformat()},
+            headers=headers,
+            timeout=30,
         )
-        return []
+        resp.raise_for_status()
+        return self._filter_seen(self._parse_hf_daily_papers(resp.json()))
 
     def fetch(self) -> list[Item]:
         if self.name == "hf_daily_papers":

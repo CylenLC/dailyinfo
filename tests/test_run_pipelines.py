@@ -508,6 +508,47 @@ def test_process_regular_source_skips_zero_state_when_retrieval_rejected_all(
     assert not (STATE_DIR / "arxiv_cs_ai_zero_state.json").exists()
 
 
+def test_process_regular_source_writes_nothing_on_weekend(rss_db, monkeypatch):
+    """A weekdays_only source must not even leave a placeholder on Sat/Sun.
+
+    An empty fetch would land in the placeholder branch, which push relays to
+    Discord as a "no updates" notice -- exactly what must not happen when the
+    source simply has no weekend edition.
+    """
+
+    import run_pipelines as rp
+    from datasource import RSSDataSource
+
+    ds = RSSDataSource(
+        {
+            "name": "hf_daily_papers",
+            "type": "rss",
+            "category": "arxiv",
+            "url": "https://rss.arxiv.org/rss/cs.AI",
+            "weekdays_only": True,
+            "date": "2026-08-22",  # Saturday
+        },
+        {},
+        db=rss_db,
+    )
+
+    def fail(*_args, **_kwargs):
+        raise AssertionError("weekend run must not fetch")
+
+    monkeypatch.setattr(ds, "fetch", fail)
+
+    saved = rp._process_regular_source(
+        ds,
+        ds.config,
+        "deepseek-v4-pro",
+        {"one_line_summary": "summarize {article_list}"},
+        "one_line_summary",
+    )
+
+    assert saved == 0
+    assert not list((rp.BRIEFINGS_DIR / "arxiv").glob("hf_daily_papers_*.md"))
+
+
 def test_arxiv_pipeline_deduplicates_hf_and_rss_before_summarizing(
     tmp_path, monkeypatch
 ):
@@ -577,6 +618,10 @@ def test_arxiv_pipeline_deduplicates_hf_and_rss_before_summarizing(
                 ],
             }[self.name]
             self.committed = []
+
+        # Exercise the real weekday-skip contract, not a divergent copy.
+        target_date = rp.DataSource.target_date
+        skips_today = rp.DataSource.skips_today
 
         def fetch(self):
             return list(self._items)
