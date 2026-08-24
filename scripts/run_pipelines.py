@@ -646,7 +646,10 @@ def _process_regular_source(ds, feed_cfg: dict, model_default: str,
         log(f"  {name}: 0 relevant new articles - placeholder")
         ds.commit_seen(commit_pool)
         ds.commit_cursor()
-        placeholder = f"# {ds.display_name} - {DATE}\n\n" + "\U0001f4ed 过去 {ds.lookback_hours} 小时无新内容\n"
+        placeholder = (
+            f"# {ds.display_name} - {DATE}\n\n"
+            f"\U0001f4ed 过去 {ds.lookback_hours} 小时无新内容\n"
+        )
         save(category, f"{name}_briefing_{DATE}.md", placeholder)
         if isinstance(ds, RSSDataSource):
             from freshrss_cache import record_zero_result
