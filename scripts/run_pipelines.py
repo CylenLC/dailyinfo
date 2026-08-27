@@ -221,7 +221,7 @@ _DEEPSEEK_KEY_CACHE: str | None = None
 
 def call_ai(
     prompt: str,
-    model: str = "step-3.5-flash",
+    model: str = "stepfun-3.7-flash",
     max_tokens: int = DEFAULT_AI_OUTPUT_TOKENS,
     *,
     fallback_model: str | None = None,
@@ -1227,7 +1227,7 @@ def _run_category_pipeline(
     path is used instead of the regular batched path.
     """
     cfg, defaults, templates = _load_sources()
-    model_default = defaults.get("model", "step-3.5-flash")
+    model_default = defaults.get("model", "stepfun-3.7-flash")
     default_tmpl_key = defaults.get("prompt_template", "one_line_summary")
     publication_collector = (
         PublicationRunCollector(category) if PUBLICATION_INTEGRATION else None
@@ -1346,7 +1346,7 @@ def _run_pipeline_code_publication() -> int:
 
     log("=== Pipeline 4: Code Trending ===")
     cfg, defaults, templates = _load_sources()
-    model_default = defaults.get("model", "step-3.5-flash")
+    model_default = defaults.get("model", "stepfun-3.7-flash")
     code_tmpl = templates.get("code_trending", "")
     collector = PublicationRunCollector("code")
     saved = 0
@@ -1431,7 +1431,7 @@ def run_pipeline_code() -> int:
 
     log("=== Pipeline 4: Code Trending ===")
     cfg, defaults, templates = _load_sources()
-    model_default = defaults.get("model", "step-3.5-flash")
+    model_default = defaults.get("model", "stepfun-3.7-flash")
     code_tmpl = templates.get("code_trending", "")
     saved = 0
 
@@ -1534,7 +1534,7 @@ def _run_pipeline_resource_publication() -> int:
 
     log("=== Pipeline 5: University News & Recruitment ===")
     cfg, defaults, prompt_templates = _load_sources()
-    model_default = defaults.get("model", "step-3.5-flash")
+    model_default = defaults.get("model", "stepfun-3.7-flash")
     collector = PublicationRunCollector("resource")
     saved = 0
 
@@ -1763,7 +1763,7 @@ def run_pipeline_resource() -> int:
 
     log("=== Pipeline 5: University News & Recruitment ===")
     cfg, defaults, prompt_templates = _load_sources()
-    model_default = defaults.get("model", "step-3.5-flash")
+    model_default = defaults.get("model", "stepfun-3.7-flash")
     saved = 0
 
     # --- Part A: unified news briefing (8 news sources -> 1 file) ---

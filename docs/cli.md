@@ -66,7 +66,7 @@ for today (either in `briefings/` waiting to be pushed, or already archived in
 to override — pass `all` to refresh everything, or repeat the flag with
 specific source names (matches `config/sources.json`).
 
-If the primary model (`step-3.5-flash` via StepFun API) returns empty responses after 3
+If the primary model (`stepfun-3.7-flash` via StepFun API) returns empty responses after 3
 retries with exponential backoff (2s / 5s / 10s), `run` automatically falls
 back to the model in `DAILYINFO_FALLBACK_MODEL` (default
 `moonshotai/kimi-k2.5` via OpenRouter) for 2 more attempts before giving up.
@@ -146,7 +146,7 @@ FRESHRSS_PASSWORD=freshrss123
 
 | Key | Purpose |
 |-----|---------|
-| `STEPFUN_API_KEY` | StepFun API key (required — primary model: `step-3.5-flash`) |
+| `STEPFUN_API_KEY` | StepFun API key (required — primary model: `stepfun-3.7-flash`) |
 | `OPENROUTER_API_KEY` | OpenRouter API key (optional, only needed for fallback) |
 | `DISCORD_BOT_TOKEN` | Discord bot token used by `dailyinfo push` |
 | `DISCORD_CHANNEL_PAPERS` / `_AI_NEWS` / `_CODE` / `_RESOURCE` / `_ARXIV` | Per-category channel IDs (missing ones are skipped, not fatal) |

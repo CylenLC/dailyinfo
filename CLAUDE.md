@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-DailyInfo is an automated research intelligence aggregation and push system for AI for Science researchers. It collects RSS feeds, scrapes websites, and queries APIs, then uses StepFun `step-3.5-flash` (OpenRouter Kimi K2.5 as fallback) to generate Chinese-language summaries pushed to Discord channels.
+DailyInfo is an automated research intelligence aggregation and push system for AI for Science researchers. It collects RSS feeds, scrapes websites, and queries APIs, then uses StepFun `stepfun-3.7-flash` (OpenRouter Kimi K2.5 as fallback) to generate Chinese-language summaries pushed to Discord channels.
 
 **Core pipeline**: FreshRSS collection -> AI summary generation (markdown to disk) -> Discord push + archive
 
@@ -15,7 +15,7 @@ DailyInfo is an automated research intelligence aggregation and push system for 
 - Python 3.10+, package manager: uv (primary) / pip (fallback)
 - CLI: Click 8+
 - RSS: FreshRSS (Docker/SQLite, `restart: always`, auto-start via myopenclaw launchd)
-- AI: StepFun `step-3.5-flash` API (fallback: OpenRouter `moonshotai/kimi-k2.5`)
+- AI: StepFun `stepfun-3.7-flash` API (fallback: OpenRouter `moonshotai/kimi-k2.5`)
 - Push: Discord Bot API via `requests`
 - Docs: MkDocs Material (GitHub Pages)
 - Lint: Ruff, Format: Black, Test: pytest 8+
@@ -109,7 +109,7 @@ Each pipeline is independent — a failure in one does not affect the others. Co
 
 Sources in `config/sources.json` have types: `rss`, `api`, `scrape`. Categories: `papers`, `ai_news`, `code`, `resource`.
 
-Defaults (all overridable per-source): `lookback_hours: 24`, `max_articles_per_batch: 10`, `model: step-3.5-flash`.
+Defaults (all overridable per-source): `lookback_hours: 24`, `max_articles_per_batch: 10`, `model: stepfun-3.7-flash`.
 
 Prompt templates under `prompt_templates` key use placeholders: `{count}`, `{display_name}`, `{article_list}`, `{items}`, `{date}`, `{content}`.
 
