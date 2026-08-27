@@ -6,7 +6,12 @@ from typing import Iterable
 from zoneinfo import ZoneInfo
 
 from .adapters import PublicationBriefingInput, PublicationItemInput
-from .identity import briefing_id, canonicalize_source_url, resolve_item_id
+from .identity import (
+    briefing_id,
+    canonicalize_source_url,
+    normalize_external_id,
+    resolve_item_id,
+)
 from .models import (
     Briefing,
     Item,
@@ -85,8 +90,12 @@ class PublicationFinalizer:
                 item_input.external_id, str
             ):
                 raise PublicationValidationError("Item.source.external_id must be text")
-            external_id = (
-                item_input.external_id.strip() if item_input.external_id else None
+            external_id = normalize_external_id(
+                source_name=source_name,
+                source_url=item_source_url,
+                external_id=(
+                    item_input.external_id.strip() if item_input.external_id else None
+                ),
             )
             item_id = resolve_item_id(
                 source_name=source_name,
@@ -110,7 +119,7 @@ class PublicationFinalizer:
                     external_id=external_id,
                 ),
                 authors=normalize_text_list(item_input.authors, "authors"),
-                source_published_at=normalize_datetime(
+                source_published_at=normalize_optional_datetime(
                     item_input.source_published_at,
                     "source_published_at",
                     date_timezone=self.business_timezone,

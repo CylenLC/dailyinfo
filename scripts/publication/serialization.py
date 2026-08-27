@@ -40,7 +40,11 @@ def item_to_dict(item: Item) -> Dict[str, Any]:
         "title": item.title,
         "source": _source_to_dict(item.source),
         "authors": list(item.authors),
-        "source_published_at": datetime_to_iso(item.source_published_at),
+        "source_published_at": (
+            datetime_to_iso(item.source_published_at)
+            if item.source_published_at is not None
+            else None
+        ),
         "retrieved_at": datetime_to_iso(item.retrieved_at),
         "published_at": datetime_to_iso(item.published_at),
         "updated_at": (
@@ -174,8 +178,10 @@ def item_from_dict(value: Mapping[str, Any]) -> Item:
                 external_id=source.get("external_id"),
             ),
             authors=value["authors"],
-            source_published_at=_parse_datetime(
-                value["source_published_at"], "source_published_at"
+            source_published_at=(
+                _parse_datetime(value["source_published_at"], "source_published_at")
+                if value["source_published_at"] is not None
+                else None
             ),
             retrieved_at=_parse_datetime(value["retrieved_at"], "retrieved_at"),
             published_at=_parse_datetime(value["published_at"], "published_at"),

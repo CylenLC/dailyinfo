@@ -13,6 +13,7 @@ from typing import Any, Iterable, List, Mapping, Optional, Union
 
 
 DateLike = Union[date, datetime, str]
+_UNSET = object()
 
 
 @dataclass
@@ -21,7 +22,7 @@ class PublicationItemInput:
 
     source_name: str
     source_url: str
-    source_published_at: DateLike
+    source_published_at: Optional[DateLike]
     title: str
     summary: str
     authors: List[str]
@@ -71,6 +72,10 @@ class StructuredPublicationAdapter:
         published_at: datetime,
         language: Optional[str] = None,
         source_url: Optional[str] = None,
+        summary: Any = _UNSET,
+        why_it_matters: Any = _UNSET,
+        tags: Any = _UNSET,
+        title: Any = _UNSET,
     ) -> PublicationItemInput:
         """Adapt a current ``datasource.Item`` or mapping.
 
@@ -83,11 +88,23 @@ class StructuredPublicationAdapter:
         extra = _extra(raw)
 
         def value(key: str, default: Any = None) -> Any:
-            return _read(raw, key, extra.get(key, default))
+            raw_value = _read(raw, key, _UNSET)
+            if raw_value is not _UNSET and raw_value is not None:
+                return raw_value
+            return extra.get(key, default)
 
         external_id = value("external_id")
         if not external_id:
-            for key in ("item_id", "guid", "openreview_id", "doi", "full_name"):
+            for key in (
+                "arxiv_id",
+                "repo_id",
+                "guid",
+                "openreview_id",
+                "doi",
+                "full_name",
+                "item_id",
+                "name",
+            ):
                 if extra.get(key):
                     external_id = extra[key]
                     break
@@ -95,12 +112,14 @@ class StructuredPublicationAdapter:
         return PublicationItemInput(
             source_name=source_name,
             source_url=source_url or value("url", ""),
-            source_published_at=value("source_published_at", value("date", "")),
-            title=value("title", ""),
-            summary=value("summary", ""),
-            why_it_matters=value("why_it_matters"),
+            source_published_at=value("source_published_at"),
+            title=value("title", "") if title is _UNSET else title,
+            summary=value("summary", "") if summary is _UNSET else summary,
+            why_it_matters=(
+                value("why_it_matters") if why_it_matters is _UNSET else why_it_matters
+            ),
             authors=value("authors", extra.get("authors", [])),
-            tags=value("tags", extra.get("tags", [])),
+            tags=value("tags", extra.get("tags", [])) if tags is _UNSET else tags,
             language=language or value("language", extra.get("content_language", "")),
             retrieved_at=retrieved_at,
             published_at=published_at,

@@ -170,10 +170,12 @@ def normalize_datetime(
     raise PublicationValidationError(f"{field_name} must be a date/datetime value")
 
 
-def normalize_optional_datetime(value: Optional[datetime], field_name: str):
+def normalize_optional_datetime(
+    value: Optional[DateLike], field_name: str, *, date_timezone=None
+):
     if value is None:
         return None
-    return normalize_datetime(value, field_name)
+    return normalize_datetime(value, field_name, date_timezone=date_timezone)
 
 
 def normalize_date(value: DateLike) -> date:
@@ -241,9 +243,14 @@ def validate_item(item: Item) -> Item:
         raise PublicationValidationError("Item.authors must be a list")
     if not isinstance(item.tags, list):
         raise PublicationValidationError("Item.tags must be a list")
-    normalize_text_list(item.authors, "Item.authors")
-    normalize_text_list(item.tags, "Item.tags", unique=True)
-    _ensure_aware(item.source_published_at, "Item.source_published_at")
+    authors = normalize_text_list(item.authors, "Item.authors")
+    tags = normalize_text_list(item.tags, "Item.tags", unique=True)
+    for value in authors:
+        _security_check(value, "Item.authors")
+    for value in tags:
+        _security_check(value, "Item.tags")
+    if item.source_published_at is not None:
+        _ensure_aware(item.source_published_at, "Item.source_published_at")
     _ensure_aware(item.retrieved_at, "Item.retrieved_at")
     _ensure_aware(item.published_at, "Item.published_at")
     if item.updated_at is not None:

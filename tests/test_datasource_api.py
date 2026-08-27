@@ -50,6 +50,8 @@ def test_huggingface_models_parse_fields():
     assert first.extra["task"] == "text-generation"
     assert first.extra["likes"] == 123
     assert first.extra["downloads"] == 45678
+    assert first.extra["repo_id"] == "org/model-a"
+    assert "source_published_at" not in first.extra
 
 
 def test_huggingface_parse_handles_non_list_data():
@@ -299,6 +301,34 @@ def test_crossref_parse_uses_online_date_for_new_items():
 
     assert [item.title for item in items] == ["Recently posted online"]
     assert items[0].date == now.strftime("%Y-%m-%d")
+    assert items[0].extra["source_published_at"] == now.strftime("%Y-%m-%d")
+    assert items[0].extra["doi"] == "10.3724/example"
+
+
+def test_dlut_recruitment_start_time_is_not_source_publication_time():
+    from datasource import APIDataSource
+
+    ds = APIDataSource(
+        {
+            "name": "dlut_recruitment",
+            "category": "resource",
+            "url": "https://x.test/",
+            "extract": {"fields": {"title": "title", "date": "startTime"}},
+        },
+        DEFAULTS,
+    )
+    items = ds._parse_dlut_api(
+        [
+            {
+                "id": 42,
+                "title": "Recruitment",
+                "startTime": "2026-08-27 01:00:00",
+            }
+        ]
+    )
+
+    assert items[0].extra["item_id"] == "42"
+    assert "source_published_at" not in items[0].extra
 
 
 def test_shuili_xuebao_config_sorts_by_updated():

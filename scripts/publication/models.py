@@ -34,7 +34,7 @@ class Item:
     title: str
     source: SourceMetadata
     authors: List[str]
-    source_published_at: datetime
+    source_published_at: Optional[datetime]
     retrieved_at: datetime
     published_at: datetime
     updated_at: Optional[datetime]

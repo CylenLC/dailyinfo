@@ -8,6 +8,14 @@ from typing import Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
+_ARXIV_ID_RE = re.compile(r"(?<!\d)(\d{4}\.\d{4,5})(?:v\d+)?(?!\d)", re.I)
+_DOI_RE = re.compile(r"^10\.\d{4,9}/\S+$", re.I)
+_DOI_PREFIX_RE = re.compile(r"^(?:doi:\s*|https?://(?:dx\.)?doi\.org/)", re.I)
+_REPO_ID_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}/[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$"
+)
+
+
 def briefing_id(category: str, publication_date: str) -> str:
     """Return the only allowed identity for a category/date briefing."""
 
@@ -56,6 +64,75 @@ def source_namespace(source_name: str) -> str:
     return normalized or "source"
 
 
+def normalize_arxiv_id(value: Optional[str]) -> Optional[str]:
+    """Return the base arXiv identifier, intentionally dropping ``vN``."""
+
+    if not isinstance(value, str) or not value.strip():
+        return None
+    match = _ARXIV_ID_RE.search(value.strip())
+    return match.group(1) if match else None
+
+
+def normalize_doi(value: Optional[str]) -> Optional[str]:
+    """Return a conservative, case-folded DOI representation."""
+
+    if not isinstance(value, str) or not value.strip():
+        return None
+    candidate = _DOI_PREFIX_RE.sub("", value.strip()).rstrip(".,;)")
+    if not _DOI_RE.fullmatch(candidate):
+        return None
+    return candidate.lower()
+
+
+def normalize_repo_id(value: Optional[str]) -> Optional[str]:
+    """Return a conservative ``namespace/name`` repository identity."""
+
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip()
+    return candidate if _REPO_ID_RE.fullmatch(candidate) else None
+
+
+def _repo_id_from_url(value: str) -> Optional[str]:
+    parsed = urlsplit(value)
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) < 2:
+        return None
+    return normalize_repo_id("/".join(parts[-2:]))
+
+
+def normalize_external_id(
+    *, source_name: str, source_url: str, external_id: Optional[str]
+) -> Optional[str]:
+    """Normalize known upstream identities without inventing one.
+
+    A malformed known identity is discarded so the resolver deterministically
+    falls back to the canonical public URL.  Unknown source identities remain
+    unchanged after whitespace trimming.
+    """
+
+    raw = external_id.strip() if isinstance(external_id, str) else None
+    source_lower = source_name.lower()
+    if "arxiv" in source_lower:
+        return normalize_arxiv_id(raw) or normalize_arxiv_id(source_url)
+
+    if "github" in source_lower or "huggingface" in source_lower:
+        return normalize_repo_id(raw) or _repo_id_from_url(source_url)
+
+    is_doi_source = (
+        "crossref" in source_lower
+        or "api.crossref.org" in source_url.lower()
+        or bool(raw and _DOI_PREFIX_RE.match(raw))
+        or bool(raw and _DOI_RE.match(raw))
+    )
+    doi = normalize_doi(raw) or normalize_doi(source_url)
+    if doi is not None:
+        return doi
+    if is_doi_source:
+        return None
+    return raw
+
+
 def resolve_item_id(
     *,
     source_name: str,
@@ -75,11 +152,18 @@ def resolve_item_id(
         return explicit_id
 
     namespace = source_namespace(source_name)
-    stable_external = (external_id or "").strip()
+    stable_external = (
+        normalize_external_id(
+            source_name=source_name,
+            source_url=source_url,
+            external_id=external_id,
+        )
+        or ""
+    )
     source_lower = source_name.lower()
     if stable_external and "arxiv" in source_lower:
-        arxiv_id = stable_external.rsplit("/", 1)[-1]
-        if re.fullmatch(r"\d{4}\.\d{4,5}(?:v\d+)?", arxiv_id):
+        arxiv_id = normalize_arxiv_id(stable_external)
+        if arxiv_id:
             return f"arxiv-{arxiv_id}"
 
     if stable_external:
