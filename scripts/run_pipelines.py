@@ -172,6 +172,11 @@ DEFAULT_FALLBACK_MODEL = "moonshotai/kimi-k2.5"
 
 _BACKOFF_SECONDS = (2, 5, 10)
 
+# StepFun reasoning plus the required structured/Markdown response can exceed
+# the old 1200-token ceiling. ``max_tokens`` is the completion budget (not
+# the input prompt length) for this OpenAI-compatible API.
+DEFAULT_AI_OUTPUT_TOKENS = 50000
+
 
 class BriefingGenerationError(ValueError):
     """Raised when an AI response is empty, truncated, or structurally incomplete."""
@@ -217,7 +222,7 @@ _DEEPSEEK_KEY_CACHE: str | None = None
 def call_ai(
     prompt: str,
     model: str = "step-3.5-flash",
-    max_tokens: int = 1200,
+    max_tokens: int = DEFAULT_AI_OUTPUT_TOKENS,
     *,
     fallback_model: str | None = None,
 ) -> str:
@@ -356,7 +361,7 @@ def _generate_regular_briefings(
     prompt_template: str,
     model: str,
     *,
-    max_tokens: int = 2500,
+    max_tokens: int = DEFAULT_AI_OUTPUT_TOKENS,
 ) -> list[tuple[str, list]]:
     """Generate one or more complete briefings, splitting oversized batches.
 
@@ -424,7 +429,7 @@ def _retry_failed_items(
         return []
     log(
         f"    Phase 2: retrying {len(failed_items)} failed articles "
-        f"with conservative settings (batch=3, max_tokens=4000)"
+        f"with conservative settings (batch=3, max_tokens={DEFAULT_AI_OUTPUT_TOKENS})"
     )
     results: list[tuple[str, list]] = []
     batch_size = 3
@@ -433,7 +438,11 @@ def _retry_failed_items(
         try:
             results.extend(
                 _generate_regular_briefings(
-                    ds, batch, prompt_template, model, max_tokens=4000
+                    ds,
+                    batch,
+                    prompt_template,
+                    model,
+                    max_tokens=DEFAULT_AI_OUTPUT_TOKENS,
                 )
             )
         except Exception as e:
@@ -608,7 +617,7 @@ def _generate_structured_batch(
     model: str,
     retrieved_at: datetime.datetime,
     *,
-    max_tokens: int = 2500,
+    max_tokens: int = DEFAULT_AI_OUTPUT_TOKENS,
     sections: dict[str, str] | None = None,
     display_titles: dict[str, str] | None = None,
 ) -> list:
@@ -636,7 +645,7 @@ def _generate_structured_briefings(
     model: str,
     retrieved_at: datetime.datetime,
     *,
-    max_tokens: int = 2500,
+    max_tokens: int = DEFAULT_AI_OUTPUT_TOKENS,
 ) -> list:
     """Generate complete structured results, splitting invalid large batches."""
 
@@ -907,7 +916,12 @@ def _process_regular_source_publication(
             try:
                 retry_results.extend(
                     _generate_structured_briefings(
-                        ds, batch, prompt_template, model, retrieved_at, max_tokens=4000
+                        ds,
+                        batch,
+                        prompt_template,
+                        model,
+                        retrieved_at,
+                        max_tokens=DEFAULT_AI_OUTPUT_TOKENS,
                     )
                 )
             except Exception as exc:
@@ -974,7 +988,7 @@ def _process_deep_content_source_publication(
         entries = f"[source_ref={ref}]\nTitle: {item.title}\nContent:\n{item.content}"
         prompt = structured_prompt(base, entries, [ref])
         try:
-            raw = call_ai(prompt, model=model, max_tokens=2000)
+            raw = call_ai(prompt, model=model, max_tokens=DEFAULT_AI_OUTPUT_TOKENS)
             result = results_from_response(
                 raw, [item], source_name=name, retrieved_at=retrieved_at
             )[0]
@@ -989,7 +1003,7 @@ def _process_deep_content_source_publication(
         except Exception as exc:
             log(f"    structured ERR for {name} item {index}: {exc}")
             try:
-                raw = call_ai(prompt, model=model, max_tokens=3000)
+                raw = call_ai(prompt, model=model, max_tokens=DEFAULT_AI_OUTPUT_TOKENS)
                 result = results_from_response(
                     raw, [item], source_name=name, retrieved_at=retrieved_at
                 )[0]
@@ -1156,7 +1170,9 @@ def _process_deep_content_source(
         suffix = f"_part{idx + 1}" if len(items) > 1 else ""
         filename = f"{name}_briefing_{DATE}{suffix}.md"
         try:
-            content_text = call_ai(prompt, model=model, max_tokens=2000)
+            content_text = call_ai(
+                prompt, model=model, max_tokens=DEFAULT_AI_OUTPUT_TOKENS
+            )
             save(category, filename, f"# AI Daily Digest - {DATE}\n\n{content_text}")
             saved += 1
             committed_items.append(item)
@@ -1178,7 +1194,9 @@ def _process_deep_content_source(
                 )
             )
             try:
-                content_text = call_ai(prompt, model=model, max_tokens=3000)
+                content_text = call_ai(
+                    prompt, model=model, max_tokens=DEFAULT_AI_OUTPUT_TOKENS
+                )
                 filename = f"{name}_briefing_{DATE}_retry{retry_idx}.md"
                 save(
                     category, filename, f"# AI Daily Digest - {DATE}\n\n{content_text}"
@@ -1379,7 +1397,7 @@ def _run_pipeline_code_publication() -> int:
             raw = call_ai(
                 prompt,
                 model=source_cfg.get("model", model_default),
-                max_tokens=2500,
+                max_tokens=DEFAULT_AI_OUTPUT_TOKENS,
             )
             results = results_from_response(
                 raw,
@@ -1475,7 +1493,9 @@ def run_pipeline_code() -> int:
             )
         try:
             content_text = call_ai(
-                prompt, model=source_cfg.get("model", model_default), max_tokens=2500
+                prompt,
+                model=source_cfg.get("model", model_default),
+                max_tokens=DEFAULT_AI_OUTPUT_TOKENS,
             )
             save(
                 "code",
@@ -1565,7 +1585,9 @@ def _run_pipeline_resource_publication() -> int:
             base = tmpl.replace("{items}", items_text).replace("{date}", DATE)
             prompt = structured_prompt(base, items_text, refs)
             try:
-                raw = call_ai(prompt, model=model_default, max_tokens=3000)
+                raw = call_ai(
+                    prompt, model=model_default, max_tokens=DEFAULT_AI_OUTPUT_TOKENS
+                )
                 results = results_from_response(
                     raw,
                     [record[2] for record in records],
@@ -1637,7 +1659,9 @@ def _run_pipeline_resource_publication() -> int:
         entries, refs = structured_entries(ds, items)
         prompt = structured_prompt(base, entries, refs)
         try:
-            raw = call_ai(prompt, model=model_default, max_tokens=1200)
+            raw = call_ai(
+                prompt, model=model_default, max_tokens=DEFAULT_AI_OUTPUT_TOKENS
+            )
             results = results_from_response(
                 raw,
                 items,
@@ -1717,7 +1741,9 @@ def _generate_unified_news(
     prompt = tmpl.replace("{items}", items_text).replace("{date}", DATE)
 
     try:
-        content_text = call_ai(prompt, model=model_default, max_tokens=3000)
+        content_text = call_ai(
+            prompt, model=model_default, max_tokens=DEFAULT_AI_OUTPUT_TOKENS
+        )
         full_content = (
             f"# 大连理工大学校园动态 - {DATE}\n\n"
             f"{content_text}\n\n"
@@ -1804,7 +1830,9 @@ def run_pipeline_resource() -> int:
         prompt = prompt_tmpl.replace("{items}", f"{ds.display_name}\n{items_text}")
 
         try:
-            content_text = call_ai(prompt, model=model_default, max_tokens=1200)
+            content_text = call_ai(
+                prompt, model=model_default, max_tokens=DEFAULT_AI_OUTPUT_TOKENS
+            )
             display_url = source_cfg.get("list_url", source_cfg.get("url", ""))
             full_content = (
                 f"# {ds.display_name} - {DATE}\n\n"

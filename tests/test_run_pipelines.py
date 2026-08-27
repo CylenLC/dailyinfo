@@ -411,6 +411,22 @@ def test_call_ai_returns_primary_content_on_first_success(monkeypatch):
     assert rp.call_ai("prompt", model="primary/model") == "hello world"
 
 
+def test_call_ai_uses_a_larger_default_output_budget(monkeypatch):
+    import run_pipelines as rp
+
+    request_budgets: list[int] = []
+    monkeypatch.setattr(rp, "_get_deepseek_key", lambda: "sk-test-ds")
+
+    def fake_post(url, *args, **kwargs):
+        request_budgets.append(kwargs["json"]["max_tokens"])
+        return _StubAIResponse(content="complete reply", finish_reason="stop")
+
+    monkeypatch.setattr(rp.requests, "post", fake_post)
+
+    assert rp.call_ai("prompt") == "complete reply"
+    assert request_budgets == [50000]
+
+
 def test_call_ai_falls_back_after_primary_empty_responses(monkeypatch):
     import run_pipelines as rp
 
