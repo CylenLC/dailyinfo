@@ -89,7 +89,15 @@ try:
 
     __version__ = _pkg_version("dailyinfo")
 except Exception:
-    __version__ = "0.0.0"
+    # Source checkouts may not have been installed as an editable package.
+    # Keep the CLI version truthful without introducing a second version value.
+    try:
+        import tomllib
+
+        with open(PROJECT_ROOT / "pyproject.toml", "rb") as _pyproject:
+            __version__ = tomllib.load(_pyproject)["project"]["version"]
+    except Exception:
+        __version__ = "0.0.0"
 
 
 @click.group()
