@@ -9,6 +9,7 @@ Usage:
     dailyinfo run        # Run all pipelines
     dailyinfo run -p 2   # Run a specific pipeline
     dailyinfo push       # Push today's briefings to Discord
+    dailyinfo publish --sink web  # Publish canonical briefings to the Web
     dailyinfo status     # Show briefing / pushed file counts
     dailyinfo logs       # Tail execution log
 """
@@ -324,6 +325,61 @@ def push(date_str, categories, force):
 
 
 @cli.command()
+@click.option(
+    "--sink",
+    type=click.Choice(["discord", "web", "all"]),
+    default="web",
+    show_default=True,
+    help="Publication delivery sink. 'all' attempts Discord and Web independently.",
+)
+@click.option(
+    "-d",
+    "--date",
+    "date_str",
+    default=None,
+    help="Date to publish in YYYY-MM-DD format. Defaults to today.",
+)
+@click.option(
+    "-c",
+    "--categories",
+    default=None,
+    help="Comma-separated canonical categories. Defaults to all five.",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Reconcile a sink even when its delivery state is already successful.",
+)
+def publish(sink, date_str, categories, force):
+    """Deliver existing canonical Publications without running a pipeline."""
+    if date_str:
+        try:
+            datetime.strptime(date_str, "%Y-%m-%d")
+        except ValueError:
+            click.echo(f"Error: --date must be YYYY-MM-DD (got {date_str!r})", err=True)
+            sys.exit(2)
+
+    scripts = []
+    if sink in ("discord", "all"):
+        scripts.append(SCRIPTS_DIR / "push_to_discord.py")
+    if sink in ("web", "all"):
+        scripts.append(SCRIPTS_DIR / "publish_to_web.py")
+
+    return_codes = []
+    for script in scripts:
+        cmd = [_python(), str(script)]
+        if date_str:
+            cmd += ["--date", date_str]
+        if categories:
+            cmd += ["--categories", categories]
+        if force:
+            cmd.append("--force")
+        result = subprocess.run(cmd, cwd=PROJECT_ROOT)
+        return_codes.append(result.returncode)
+    sys.exit(1 if any(code != 0 for code in return_codes) else 0)
+
+
+@cli.command()
 @click.option("--days", default=7, show_default=True, help="Lookback window in days.")
 @click.option("--force", is_flag=True, help="Overwrite existing recap for today.")
 def weekly(days, force):
@@ -393,12 +449,30 @@ def _source_url(source_name: str) -> str:
     show_default=True,
     help="Configured source name whose FreshRSS cache should be cleared.",
 )
-@click.option("--url", default="", help="Explicit feed URL to clear instead of --source.")
-@click.option("--all-stale", is_flag=True, help="Clear every stale SimplePie cache entry.")
-@click.option("--max-age", default=24, show_default=True, help="Stale threshold in hours for --all-stale.")
-@click.option("--dry-run", is_flag=True, help="Show what would be deleted without deleting.")
-@click.option("--refresh", is_flag=True, help="Run FreshRSS actualize_script.php after clearing.")
-@click.option("--container", default="dailyinfo_freshrss", show_default=True, help="FreshRSS container name for --refresh.")
+@click.option(
+    "--url", default="", help="Explicit feed URL to clear instead of --source."
+)
+@click.option(
+    "--all-stale", is_flag=True, help="Clear every stale SimplePie cache entry."
+)
+@click.option(
+    "--max-age",
+    default=24,
+    show_default=True,
+    help="Stale threshold in hours for --all-stale.",
+)
+@click.option(
+    "--dry-run", is_flag=True, help="Show what would be deleted without deleting."
+)
+@click.option(
+    "--refresh", is_flag=True, help="Run FreshRSS actualize_script.php after clearing."
+)
+@click.option(
+    "--container",
+    default="dailyinfo_freshrss",
+    show_default=True,
+    help="FreshRSS container name for --refresh.",
+)
 def cache_clear(source, url, all_stale, max_age, dry_run, refresh, container):
     """Clear FreshRSS SimplePie cache files for stuck feeds (see issue #57)."""
     sys.path.insert(0, str(PROJECT_ROOT / "scripts"))

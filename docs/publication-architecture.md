@@ -1,4 +1,4 @@
-# Canonical Publication Architecture (Phase 2A / 2B / 2B-F / 2C)
+# Canonical Publication Architecture (Phase 2A / 2B / 2B-F / 2C / 2D)
 
 DailyInfo now has a delivery-independent publication boundary:
 
@@ -10,6 +10,8 @@ pipeline result
     -> PublicationBundle
     -> PublicationStore
     -> Publisher / Delivery State
+        ├── DiscordPublisher
+        └── WebPublisher -> dailyinfo-web generated content
 ```
 
 The existing `briefings/` and `pushed/` directories remain unchanged. The
@@ -305,7 +307,7 @@ adds them.
 
 ## Publication State vs Delivery State (Phase 2C)
 
-Phase 2C adds a delivery boundary without changing the canonical models:
+Phase 2C/2D adds a delivery boundary without changing the canonical models:
 
 ```text
 PublicationStore
@@ -411,11 +413,59 @@ can retry the archive move because the canonical delivery remains successful.
 `dailyinfo run` still produces canonical content only; it does not call a
 Publisher. `dailyinfo push` performs Discord delivery and returns non-zero when
 a canonical delivery or required local delivery-state operation fails. A
-future Phase 2D WebPublisher can consume the same `PublicationBundle` and use
-`sink=web` without changing Item identity, Briefing identity, canonical hashes,
-or Discord state semantics.
+Phase 2D WebPublisher consumes the same `PublicationBundle` and uses `sink=web`
+without changing Item identity, Briefing identity, canonical hashes, or Discord
+state semantics.
 
 The existing `weekly` recap is outside Publication Contract v1 and continues to
 use its legacy Markdown push path until a future contract explicitly includes
 that category. The canonical five categories remain fail-closed when a real
 pending Markdown file has no corresponding canonical bundle.
+
+## WebPublisher and cross-repository publishing (Phase 2D)
+
+Web delivery is an independent briefing-level sink. Its delivery key is
+`{briefing_id}:web`, and `DeliveryCoordinator` skips a recorded success unless
+the caller passes `--force`. The WebPublisher never reads legacy
+`briefings/`/`pushed/` Markdown and never changes Discord state.
+
+The configured `DAILYINFO_WEB_REPO` must point to a persistent clean checkout of
+`dailyinfo-web`. `DAILYINFO_WEB_REMOTE` and `DAILYINFO_WEB_BRANCH` default to
+`git@github.com:CylenLC/dailyinfo-web.git` and `main`. The publisher holds a
+process lock across fetch, fast-forward, generated-file write, Web validation,
+commit, and push. It rejects a wrong checkout root, branch, origin, dirty
+worktree, detached head, diverged/non-fast-forward history, and local commits
+that are not publisher commits.
+
+Only these generated paths are managed:
+
+```text
+src/content/items/generated/{category}/{item-id}.md
+src/content/briefings/generated/{YYYY}/{MM}/{DD}/{category}.md
+```
+
+Frontmatter is deterministic UTF-8 JSON-compatible YAML. The Item and Briefing
+Markdown bodies are generated from canonical structured data; a Briefing body
+is copied as presentation content and is never parsed to reconstruct Items.
+`source_published_at` and `why_it_matters` are emitted as explicit `null` when
+the canonical contract has no value. The Web consumer accepts those nulls and
+does not display a fabricated source time. The Web schema's stable-ID contract
+is narrower than the legacy Python validator for explicit IDs; therefore the
+WebPublisher rejects an uppercase or colon-containing ID before writing it,
+rather than rewriting a stable identity or producing an invalid Web path.
+
+Before any commit, the publisher runs `npm run validate`, `npm run test`,
+`npm run check`, and `npm run build` in the target checkout. It stages only its
+generated paths, creates at most one ordinary `DailyInfo Bot` commit per
+Briefing, and pushes only `origin main` without force. A validation, staging,
+commit, or push failure is non-successful. A push failure intentionally leaves
+the local publisher commit for an auditable retry; a later retry recognizes the
+publisher-only local-ahead state and does not create a duplicate content commit.
+The transaction never rolls back a commit after it has been created.
+
+`dailyinfo publish --sink web` publishes canonical briefings for the requested
+date/categories. `--sink all` invokes Discord and Web independently and returns
+non-zero if either sink fails; one sink's success is not rolled back by the
+other. Web publishing is not part of `dailyinfo run` in Phase 2D, so a pipeline
+run cannot silently create a cross-repository commit. An empty canonical store
+is a successful no-op; legacy-only files are not publication input.

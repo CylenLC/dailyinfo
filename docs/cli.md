@@ -91,6 +91,32 @@ remain for compatibility and archive maintenance; a real legacy pending file
 without a canonical bundle is rejected instead of being used as a new
 publication source.
 
+### Publish canonical Publications
+
+```bash
+dailyinfo publish --sink web                       # publish today to dailyinfo-web
+dailyinfo publish --sink web -d 2026-04-22         # publish one date
+dailyinfo publish --sink web -c papers,arxiv       # select categories
+dailyinfo publish --sink web --force                # reconcile Web despite success state
+dailyinfo publish --sink discord                   # canonical Discord delivery
+dailyinfo publish --sink all                       # independent Discord + Web attempts
+```
+
+The Web sink requires `DAILYINFO_WEB_REPO` to name a persistent local
+`dailyinfo-web` checkout. Optional `DAILYINFO_WEB_REMOTE` and
+`DAILYINFO_WEB_BRANCH` protect against publishing to the wrong remote or branch.
+The checkout must be clean and on the configured branch. WebPublisher fetches
+and fast-forwards only, writes only `src/content/items/generated/` and
+`src/content/briefings/generated/`, runs the Web validation/test/check/build
+gates, then creates and pushes one ordinary DailyInfo Bot commit for each
+changed Briefing. A push failure leaves that local publisher commit for retry.
+
+`dailyinfo publish` reads canonical `publications/` only; it never reconstructs
+a PublicationBundle from legacy Markdown. With `--sink all`, a failed sink does
+not roll back a successful other sink, and the command exits non-zero if either
+sink fails. Web publishing is intentionally not part of `dailyinfo run` in
+Phase 2D.
+
 ### Weekly Recap
 
 ```bash
@@ -127,6 +153,9 @@ FRESHRSS_PASSWORD=freshrss123
 | `DISCORD_CHANNEL_*_DEV` / `_STAGING` | Env-specific channel IDs when `DAILYINFO_ENV=dev` or `staging` |
 | `DAILYINFO_ENV` | Environment: `prod` / `dev` / `staging` (default `prod`) — controls data dir and channel suffix |
 | `DAILYINFO_DATA_ROOT` | Override data root (default `~/.myagentdata/dailyinfo`; env-suffixed for dev/staging) |
+| `DAILYINFO_WEB_REPO` | Local `dailyinfo-web` checkout required by `publish --sink web` |
+| `DAILYINFO_WEB_REMOTE` | Expected Web `origin` URL (default `git@github.com:CylenLC/dailyinfo-web.git`) |
+| `DAILYINFO_WEB_BRANCH` | Expected Web branch (default `main`) |
 | `FRESHRSS_USER` | FreshRSS username (default: `$USER`) |
 | `FRESHRSS_PASSWORD` | FreshRSS password |
 | `DAILYINFO_FALLBACK_MODEL` | Fallback LLM when the primary model returns empty (default `moonshotai/kimi-k2.5`) |

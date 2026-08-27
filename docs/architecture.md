@@ -131,3 +131,28 @@ Set `DAILYINFO_ENV=dev` or `staging` to use the suffixed keys. If the suffixed
 key is empty, dev/staging falls back to the prod channel with a warning.
 
 缺失某个分类的频道 ID 时，`dailyinfo push` 会打 WARN 并跳过该分类，不会中断其他分类的推送。
+
+## Canonical Publication and Web delivery (Phase 2D)
+
+`dailyinfo run` produces the existing Markdown presentation and, through the
+structured publication boundary, persists a validated `PublicationBundle` in
+`publications/`. `dailyinfo publish --sink web` then loads only that canonical
+store and sends it through `WebPublisher`; legacy `briefings/` and `pushed/`
+files are not parsed as Web input.
+
+```text
+pipeline structured result
+    -> PublicationFinalizer
+    -> PublicationStore
+    -> DeliveryCoordinator
+         ├── DiscordPublisher -> Discord
+         └── WebPublisher -> dailyinfo-web generated/ -> Web gates -> Git
+```
+
+The Web sink writes only `src/content/items/generated/` and
+`src/content/briefings/generated/` in the configured persistent checkout. It
+requires a clean expected branch/origin, uses fetch plus fast-forward only,
+holds a process lock across the complete transaction, runs validation/test/
+check/build before committing, and records sink state separately under
+`deliveries/web/`. A Web push failure never rolls back Discord, and a Discord
+failure never rolls back a successful Web commit.

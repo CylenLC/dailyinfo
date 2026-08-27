@@ -74,6 +74,17 @@ from .publishers import (
     Publisher,
     sanitize_error,
 )
+from .web import (
+    DEFAULT_WEB_BRANCH,
+    DEFAULT_WEB_REMOTE,
+    DEFAULT_WEB_VALIDATION_COMMANDS,
+    WEB_SINK,
+    WebPublishConfig,
+    WebPublisher,
+    WebPublishError,
+    serialize_web_briefing,
+    serialize_web_item,
+)
 from .validation import (
     validate_briefing,
     validate_bundle,
@@ -134,6 +145,15 @@ __all__ = [
     "PublishResult",
     "Publisher",
     "sanitize_error",
+    "DEFAULT_WEB_BRANCH",
+    "DEFAULT_WEB_REMOTE",
+    "DEFAULT_WEB_VALIDATION_COMMANDS",
+    "WEB_SINK",
+    "WebPublishConfig",
+    "WebPublisher",
+    "WebPublishError",
+    "serialize_web_briefing",
+    "serialize_web_item",
     "delivery_key",
     "delivery_state_from_dict",
     "delivery_state_to_dict",

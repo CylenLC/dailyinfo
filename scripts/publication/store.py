@@ -227,6 +227,37 @@ class PublicationStore:
         self.validate_integrity()
         return bundle
 
+    def list_briefings(
+        self,
+        *,
+        date_value: Optional[str] = None,
+        categories: Optional[Iterable[str]] = None,
+    ) -> List[Briefing]:
+        """List canonical briefings without consulting legacy Markdown paths."""
+
+        if not self.root.exists():
+            return []
+        self.validate_integrity()
+        selected_categories = None
+        if categories is not None:
+            selected_categories = {
+                validate_category(category) for category in categories
+            }
+        briefings = self._all_briefings()
+        if date_value is not None:
+            briefings = [
+                briefing
+                for briefing in briefings
+                if briefing.date.isoformat() == date_value
+            ]
+        if selected_categories is not None:
+            briefings = [
+                briefing
+                for briefing in briefings
+                if briefing.category in selected_categories
+            ]
+        return sorted(briefings, key=lambda briefing: briefing.id)
+
     def validate_integrity(self) -> None:
         """Validate every canonical object and both sides of every relation."""
 
