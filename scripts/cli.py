@@ -28,11 +28,17 @@ _SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
-import click
+import click  # noqa: E402
 
-from paths import BRIEFINGS_DIR, CURRENT_ENV, FRESHRSS_DATA, PUSHED_DIR, WORKSPACE_ROOT
+from paths import (  # noqa: E402
+    BRIEFINGS_DIR,
+    CURRENT_ENV,
+    FRESHRSS_DATA,
+    PUSHED_DIR,
+    WORKSPACE_ROOT,
+)
 
-from clean_cache import clean_stale_cache
+from clean_cache import clean_stale_cache  # noqa: E402
 
 SCRIPTS_DIR = Path(__file__).parent.resolve()
 PROJECT_ROOT = SCRIPTS_DIR.parent
@@ -287,7 +293,12 @@ def run(pipeline, force):
         "Defaults to all five categories."
     ),
 )
-def push(date_str, categories):
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Force a new Discord attempt even when delivery state is success.",
+)
+def push(date_str, categories, force):
     """Push briefings for the given date (default: today) to Discord channels.
 
     Use --categories to restrict which channels are pushed.
@@ -306,6 +317,8 @@ def push(date_str, categories):
         cmd += ["--date", date_str]
     if categories:
         cmd += ["--categories", categories]
+    if force:
+        cmd.append("--force")
     result = subprocess.run(cmd, cwd=PROJECT_ROOT)
     sys.exit(result.returncode)
 

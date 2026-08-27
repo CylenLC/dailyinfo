@@ -49,10 +49,11 @@ DailyInfo 是面向 AI for Science 研究者的自动化情报聚合与精读系
 ┌─────────────────────────────────────────────────────────────────────┐
 │                    Push Layer (dailyinfo push)                      │
 │  ┌──────────────────────────────────────────────────────────────┐   │
-│  │  scripts/push_to_discord.py  (plain Python, no LLM)          │   │
-│  │  • scan briefings/{category}/ for today's files              │   │
-│  │  • POST to Discord channel (split > 2000 chars)              │   │
-│  │  • mv to pushed/{category}/ after success                    │   │
+│  │  scripts/push_to_discord.py + publication publishers         │   │
+│  │  • load canonical PublicationBundle for today's briefing      │   │
+│  │  • POST via DiscordPublisher (split > 2000 chars)             │   │
+│  │  • atomically record deliveries/{sink}/{briefing}.json        │   │
+│  │  • maintain pushed/{category}/ as a legacy archive             │   │
 │  └──────────────────────────────────────────────────────────────┘   │
 │                         ▼ Discord channels                          │
 │              #paper | #deeplearning | #code | #resource             │
@@ -72,7 +73,8 @@ DailyInfo 是面向 AI for Science 研究者的自动化情报聚合与精读系
 |-----------|---------|-------|
 | `~/.myagentdata/dailyinfo/freshrss/data/` | FreshRSS DB + config | dailyinfo (freshrss container) |
 | `~/.myagentdata/dailyinfo/briefings/` | Generated briefings (pending push) | `dailyinfo run` |
-| `~/.myagentdata/dailyinfo/pushed/` | Archive after successful push | `dailyinfo push` |
+| `~/.myagentdata/dailyinfo/pushed/` | Legacy archive after successful push | `dailyinfo push` |
+| `~/.myagentdata/dailyinfo/deliveries/` | Authoritative sink delivery state | `DeliveryStateStore` |
 | `~/.myagentdata/dailyinfo/state/` | Runtime state (marker files) | `dailyinfo run` |
 
 数据根默认在 `~/.myagentdata/dailyinfo/`，可通过 `DAILYINFO_DATA_ROOT` 覆盖。dailyinfo 本身不做备份；若与 myopenclaw 等支持只读挂载 `~/.myagentdata/` 的备份方案一起使用，可直接被覆盖（详见 [Agent Config](agent-config.md)）。
@@ -82,10 +84,12 @@ DailyInfo 是面向 AI for Science 研究者的自动化情报聚合与精读系
 | Layer | Responsibility | Does NOT do |
 |-------|----------------|-------------|
 | **Processing** (`run_pipelines.py`) | RSS/API/Scrape → LLM → Markdown file | ❌ 推送、调度 |
-| **Push** (`push_to_discord.py`) | 扫 briefings → POST Discord → 归档 | ❌ 调用 AI、调度 |
+| **Push** (`push_to_discord.py`) | Canonical Publication → Publisher → Discord + delivery state; maintain legacy archive | ❌ 调用 AI、调度 |
 | **Scheduling** (external cron) | 定时触发 `dailyinfo run` / `dailyinfo push` | ❌ 业务逻辑 |
 
-两层脚本都是幂等纯函数：`run` 重跑只会覆盖当天文件；`push` 重跑不会重复推送（因为成功后会 `mv`）。
+`run` 仍只负责生成 canonical content，不自动 push。`push` 对新
+Publication 依据独立 delivery state 实现正常重跑 no-op；`pushed/` 仍保留
+用于历史归档兼容，而不再作为新 canonical delivery 的唯一事实来源。
 
 ## Pipeline Details
 

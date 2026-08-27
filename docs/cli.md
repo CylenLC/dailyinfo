@@ -78,12 +78,18 @@ dailyinfo push                       # Push today's briefings (all categories)
 dailyinfo push -d 2026-04-22         # Backfill a specific day (YYYY-MM-DD)
 dailyinfo push -c papers,ai_news     # Push only selected categories
 dailyinfo push -c weekly             # Push weekly recap only (noon cron)
+dailyinfo push --force               # Explicitly retry a successful Discord delivery
 ```
 
-Scans files under `~/.myagentdata/dailyinfo/briefings/{category}/` whose name
-contains the target date, posts to the mapped Discord channel, and moves
-successfully pushed files to `pushed/{category}/`. `push` is idempotent: a day
-with no pending files just emits a "暂无新简报" notice and exits cleanly.
+For Phase 2C publications, `push` loads the canonical
+`publications/briefings/.../briefing.json` bundle, sends its `Briefing.body`
+through `DiscordPublisher`, and records `(briefing_id, discord)` in the
+independent `deliveries/` store. A recorded successful delivery is skipped on
+normal repeats; `--force` explicitly sends it again. Failed deliveries return
+non-zero and remain retryable. The old `briefings/` and `pushed/` Markdown paths
+remain for compatibility and archive maintenance; a real legacy pending file
+without a canonical bundle is rejected instead of being used as a new
+publication source.
 
 ### Weekly Recap
 

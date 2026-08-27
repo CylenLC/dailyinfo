@@ -1,4 +1,4 @@
-# Canonical Publication Architecture (Phase 2A)
+# Canonical Publication Architecture (Phase 2A / 2B / 2B-F / 2C)
 
 DailyInfo now has a delivery-independent publication boundary:
 
@@ -9,12 +9,14 @@ pipeline result
     -> validation + relationship linking
     -> PublicationBundle
     -> PublicationStore
-    -> future delivery publishers
+    -> Publisher / Delivery State
 ```
 
 The existing `briefings/` and `pushed/` directories remain unchanged. The
-canonical layer is additive and does not send Discord messages, write
-`dailyinfo-web`, perform Git operations, or track delivery state.
+canonical layer is additive; finalization itself does not send Discord
+messages, write `dailyinfo-web`, or perform Git operations. Phase 2C adds
+separate sink delivery state without putting it into canonical publication
+objects.
 
 ## Contract v1
 
@@ -35,7 +37,8 @@ optional significance note, tags, language, and `briefing_ids`.
 Item identity is resolved in this order:
 
 1. an explicitly supplied canonical id;
-2. an arXiv stable id, when available;
+2. an arXiv base id, when available (revision suffixes such as `v2` are
+   removed);
 3. a SHA-256 digest of a stable external id (for example GitHub owner/repo or
    a feed GUID), using the canonical source namespace in the hash material;
 4. a SHA-256 digest of the canonical public item URL, using the canonical
@@ -55,6 +58,12 @@ variants such as `OpenReview` and `Open Review` do not create separate
 namespaces, while two different source namespaces with the same external ID
 cannot collide. Explicit IDs are still syntax-validated and remain subject to
 Store collision and category checks.
+
+Known upstream identities are normalized before resolution: arXiv ids use the
+base id, DOI values use a lower-case bare DOI, RSS GUIDs are retained under the
+configured source namespace, and GitHub/HuggingFace/DLUT identifiers are
+source-derived facts. A malformed known identifier is not hashed as if it were
+valid; the resolver uses the deterministic URL fallback when one is available.
 
 `id` and `category` are immutable identity fields. Store writes reject an item
 with an existing id in another category as an identity migration. Other item
@@ -102,31 +111,108 @@ Lifecycle policy is explicit: an existing Item receives the latest incoming
 persisted when supplied, while an omitted value preserves the previous one.
 No clock is consulted by the Finalizer.
 
-## Finalizer and current pipeline gap
+### Source time semantics
+
+The three publication-related timestamps have deliberately separate meanings:
+
+| Field | Meaning | Producer | Optional | Hash |
+| --- | --- | --- | --- | --- |
+| `source_published_at` | Upstream publish/create/first-public timestamp | datasource/source metadata | Yes; `null` when the source does not provide a reliable value | Yes |
+| `retrieved_at` | When DailyInfo actually fetched/observed the item | retrieval boundary | No | No |
+| `published_at` | First time DailyInfo finalized the canonical Item/Briefing | Finalizer/Store lifecycle | No | No |
+
+An observation date, trending date, briefing date, or retrieval clock is never
+used as `source_published_at`. In particular, GitHub Trending and HuggingFace
+listing observations have no source publication time in the current adapters,
+so their canonical value is `null`. A consumer should omit a Source Published
+display field when the value is `null`; it must not display `Unknown` or
+substitute `retrieved_at`.
+
+The semantic hash includes the true upstream time when present and includes a
+stable JSON `null` when absent. Therefore missing time is not silently made
+equivalent to a fabricated observation timestamp.
+
+### Stable external identity and provenance
+
+Source facts are captured before structured LLM enrichment. The LLM receives
+only `source_ref` for batch correlation and never generates `external_id` or
+source timestamps.
+
+| Field | Meaning | Producer |
+| --- | --- | --- |
+| `source_published_at` | Upstream publish/create/first-public time | datasource extractor |
+| `retrieved_at` | DailyInfo retrieval clock | retrieval boundary |
+| `published_at` | First canonical finalization time | Finalizer/Store |
+| `source.external_id` | Upstream stable identity, normalized before the resolver applies its source namespace to `Item.id` | datasource metadata or deterministic URL parsing |
+| `summary` | DailyInfo content summary | structured LLM response |
+
+The current source identity inventory is:
+
+| Source | Stable external identity | Fallback |
+| --- | --- | --- |
+| arXiv | base arXiv id parsed from feed GUID/item URL | namespaced canonical URL |
+| RSS | feed GUID when FreshRSS exposes it | namespaced canonical item URL |
+| GitHub | `full_name` (`owner/repo`) | namespaced canonical repo URL |
+| HuggingFace | API `id`, preserved as `repo_id` (`namespace/name`) | namespaced canonical repo URL |
+| Crossref | DOI, normalized to lower-case bare form | namespaced canonical URL |
+| DLUT recruitment | API `item_id` when present | namespaced list/detail URL |
+
+arXiv `v1` and `v2` resolve to one base-paper Item identity, so a revision is
+a semantic update. DOI representations such as `https://doi.org/10.X/ABC`,
+`doi:10.X/ABC`, and `10.x/abc` resolve to the same normalized identity when
+they are valid DOI forms. Different configured source namespaces remain
+isolated even when their external strings are equal.
+
+## Structured pipeline boundary (Phase 2B)
 
 `StructuredPublicationAdapter` accepts the current `datasource.Item` shape or
 a mapping, but reads item summaries and other canonical fields only from
 explicit structured fields. It intentionally ignores `content` as a summary
 and never parses final Markdown.
 
-The current five pipelines retain title/date/url/content/extra and produce a
-combined Markdown briefing. They do not yet retain per-item LLM summary,
-why-it-matters, tags, authors, content language, or explicit retrieval and
-publication timestamps. Consequently, the current `dailyinfo run` is not
-automatically wired to finalization: doing so would require fabricating fields
-or reverse-parsing Markdown. A future pipeline integration point is directly
-after the structured item list and successful Markdown generation, with an
-adapter populated by structured LLM output.
+The user-facing `dailyinfo run` now enables the Phase 2B integration. Each
+category collects source items and explicit structured LLM enrichments, renders
+the legacy Markdown presentation from those same results, and finalizes one
+canonical category/date briefing after all of its sources finish:
+
+```text
+source Item + source facts
+    -> batch-local source_ref prompt
+    -> one structured JSON LLM response per batch/item
+    -> strict correlation validation
+    -> Python Markdown renderer + StructuredPublicationAdapter
+    -> PublicationFinalizer
+    -> PublicationStore
+```
+
+The JSON response must contain exactly one non-empty `summary` for every
+`source_ref`. Missing, duplicate, unknown, malformed, or wrong-typed entries
+fail closed. The adapter never uses source `content` or generated Markdown as
+the canonical summary. `why_it_matters` and `tags` are optional structured
+enrichments; the current default language is `zh-CN`, while source facts such
+as title, URL, date, source name, and stable external identifiers remain owned
+by the source item.
+
+The five production category paths are integrated: regular RSS/scrape/API
+sources for `papers` and `arxiv`, deep-content RSS for `ai_news`, the
+GitHub/HuggingFace sources for `code`, and DLUT news/recruitment sources for
+`resource`. A category has one collector and one finalizer call, so multiple
+source files do not create multiple canonical briefings for the same date.
+For regular/deep RSS paths, source seen-state is deferred until the atomic
+canonical Store write succeeds, so a failed finalization remains retryable.
+Direct calls to the old helper functions retain their legacy Markdown-only
+behavior for compatibility; `dailyinfo run` is the supported integrated entry
+point.
 
 Current source-shape audit:
 
 | Category | Pipeline/source shape retained before finalization | Current gap |
 | --- | --- | --- |
-| `papers` | RSS/scrape/API items expose title, date, article URL, and source-specific `extra` | no structured summary, significance, authors, tags, language, or lifecycle timestamps |
-| `ai_news` | RSS items expose title, date, URL, and article body for `use_content` sources | body is source content, not an LLM summary; no structured canonical fields |
-| `code` | GitHub/HuggingFace items expose title/description, date, URL, and code metrics in `extra` | programming-language metadata is not content language; no structured summary or lifecycle timestamps |
-| `resource` | DLUT HTML/API items expose title, parsed date, URL, and occasional source-specific metadata | no structured summary, significance, authors, tags, language, or lifecycle timestamps |
-| `arxiv` | RSS items expose title, date, and URL | FreshRSS query does not retain the feed GUID/arXiv id; URL-derived identity is used until that metadata is retained |
+| `papers` | RSS items retain source epoch time and FreshRSS GUID when available; Crossref retains publication date and DOI; scrapers expose parsed article dates/URLs; LLM response supplies per-item summary | most journal RSS feeds do not expose authors; feeds without GUID use URL fallback; tags/significance are model-optional |
+| `ai_news` | RSS `use_content` items retain source epoch time, title, date, URL, and raw article body; one structured response is generated per article | raw body is retained only as input, not canonical summary; source does not expose authors/tags |
+| `code` | GitHub items retain `full_name`; HuggingFace API items retain API `id` as `repo_id`; listing date remains observation metadata; structured response supplies summary | neither current listing source provides a reliable publish/create timestamp; programming-language metadata is not content language; authors are unavailable |
+| `resource` | DLUT HTML items retain parsed list/detail publication dates; API recruitment items retain `item_id` and only use an explicit publish/create field for source time | recruitment `startTime` is not treated as publication time; authors are unavailable; malformed/unknown dates or missing public URLs fail publication rather than being fabricated |
+| `arxiv` | RSS items retain source epoch time, feed GUID when present, and arXiv id derived from URL/GUID | feed items without a valid id use the namespaced canonical URL fallback; observation date is not source time |
 
 The adapter therefore requires real structured values for required publication
 fields. It does not silently use a feed URL, article body, title, or Markdown as
@@ -161,7 +247,7 @@ SHA-256 over canonical UTF-8 JSON (`sort_keys=True`, compact separators,
 briefing item order remains significant.
 
 Semantic hashes include identity/category, source metadata, source publication
-time, content fields, and briefing composition/body. Item `retrieved_at`, Item
+time (including deterministic `null` when unavailable), content fields, and briefing composition/body. Item `retrieved_at`, Item
 `published_at`, Item `updated_at`, Briefing `generated_at`/`published_at`/
 `updated_at`, and Item relationship membership are excluded as
 runtime/record metadata. This means a repeated fetch or re-finalize of
@@ -205,14 +291,131 @@ second copy that could drift.
 
 An object is `FINALIZED` only after construction, full validation, and complete
 store persistence succeed. Discord/Web success is not part of this state.
-Delivery state belongs to Phase 2B/2C and is deliberately absent from the
-models.
+Phase 2C stores Discord delivery state separately; delivery state remains
+deliberately absent from the canonical publication models.
 
-Historical `briefings/` and `pushed/` files are not backfilled in Phase 2A.
+Historical `briefings/` and `pushed/` files are not backfilled in Phase 2A/2B.
 Backfill should be a separate, explicitly validated migration because old
 Markdown lacks enough structured item metadata for safe reconstruction.
 
 `conference` and `social` are existing legacy runtime categories but are
 explicitly outside Publication Contract v1. They are not implicitly mapped to
-`papers` or `ai_news`, and must bypass this layer until a future contract
-revision adds them.
+`papers` or `ai_news`, and bypass this layer until a future contract revision
+adds them.
+
+## Publication State vs Delivery State (Phase 2C)
+
+Phase 2C adds a delivery boundary without changing the canonical models:
+
+```text
+PublicationStore
+    -> PublicationBundle
+    -> Publisher
+    -> DiscordPublisher
+    -> Discord
+    -> DeliveryStateStore
+```
+
+`PublicationBundle` remains the authoritative description of what DailyInfo
+finalized. It has no `discord_pushed`, `web_published`, message id, or delivery
+counter. Delivery state describes where that briefing was sent and is stored
+independently under `WORKSPACE_ROOT/deliveries/`.
+
+The v1 delivery unit is a briefing, not an Item. Its deterministic identity is:
+
+```text
+{briefing_id}:{sink}
+```
+
+For example, `papers-2026-08-27:discord` and
+`papers-2026-08-27:web` are independent records. The machine sink name is the
+lowercase string `discord`; no WebPublisher is implemented in Phase 2C.
+
+### Delivery state contract
+
+Each JSON record contains:
+
+```text
+schema_version
+briefing_id
+sink
+status                 # pending | success | failed
+attempt_count          # briefing-level attempts, not chunk count
+first_attempted_at
+last_attempted_at
+delivered_at
+external_ref
+last_error
+```
+
+Timestamps are timezone-aware UTC ISO-8601 values. Delivery JSON is validated
+on read; unknown schema, wrong identity, malformed timestamps, invalid status,
+or sensitive error metadata fail closed. Webhook URLs, authorization headers,
+tokens, and local paths are never written to delivery state.
+
+The normal state machine is:
+
+```text
+missing -> pending -> success
+missing -> pending -> failed -> pending -> success
+pending (process interrupted) -> pending -> success|failed
+success -> no-op
+success --force--> pending -> success|failed
+```
+
+`dailyinfo push` checks `success` before calling Discord, so a normal repeated
+push makes no HTTP call. A failed attempt remains retryable and increments the
+same delivery record's `attempt_count`. `--force` explicitly creates another
+attempt while retaining the same delivery identity.
+
+`DiscordPublisher` consumes only the canonical `Briefing.body`. It reuses the
+existing Discord transport, Markdown-compatible content, chunking, retry, and
+HTTP status handling. A partial chunk send is a failed briefing delivery even
+when earlier chunks were accepted by Discord; a retry may duplicate those
+earlier chunks.
+
+### Legacy `pushed/` compatibility and failure windows
+
+`pushed/` is retained as a legacy archive and historical success marker. When a
+canonical briefing exists but its delivery state is absent, a matching legacy
+`pushed/{category}/*{date}*.md` marker bootstraps a success state without
+resending the historical briefing. New canonical deliveries archive their old
+Markdown files only after external delivery and local success state have been
+recorded. Canonical files remain unchanged during delivery.
+
+For a real legacy pending Markdown file without a canonical bundle, the new
+push path fails closed instead of sending that Markdown as a substitute. Empty
+or placeholder-only legacy input retains the existing no-update notice
+behavior. This avoids turning a failed Phase 2B finalization into an accidental
+Discord delivery while still preserving historical archive compatibility.
+
+The order for a canonical delivery is:
+
+```text
+load and validate canonical bundle
+    -> check DeliveryStateStore
+    -> atomically record pending attempt
+    -> DiscordPublisher sends
+    -> atomically record success or failed
+    -> best-effort legacy archive maintenance
+```
+
+The external Discord request and the local filesystem write cannot be committed
+atomically. If Discord accepts a message and the process fails before the local
+success record is written, the next retry may send a duplicate. Therefore the
+guarantee is best-effort idempotency during normally recorded operation, not
+transactional exactly-once delivery. Archive move failure is reported without
+changing a recorded delivery success or causing a resend; the next invocation
+can retry the archive move because the canonical delivery remains successful.
+
+`dailyinfo run` still produces canonical content only; it does not call a
+Publisher. `dailyinfo push` performs Discord delivery and returns non-zero when
+a canonical delivery or required local delivery-state operation fails. A
+future Phase 2D WebPublisher can consume the same `PublicationBundle` and use
+`sink=web` without changing Item identity, Briefing identity, canonical hashes,
+or Discord state semantics.
+
+The existing `weekly` recap is outside Publication Contract v1 and continues to
+use its legacy Markdown push path until a future contract explicitly includes
+that category. The canonical five categories remain fail-closed when a real
+pending Markdown file has no corresponding canonical bundle.

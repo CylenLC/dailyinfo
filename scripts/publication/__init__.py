@@ -1,8 +1,8 @@
-"""Canonical Publication v1 layer for DailyInfo.
+"""Canonical Publication v1 and Phase 2C delivery boundary for DailyInfo.
 
-The package deliberately has no delivery-sink dependencies.  It turns a
-structured pipeline result into validated, serializable publication objects
-and persists them through :class:`PublicationStore`.
+The canonical models/finalizer/store remain transport-independent. Publisher
+implementations are exposed separately so a sink consumes a validated
+``PublicationBundle`` without becoming part of the publication model.
 """
 
 from .adapters import (
@@ -11,7 +11,13 @@ from .adapters import (
     StructuredPublicationAdapter,
 )
 from .finalizer import PublicationFinalizer
-from .identity import source_namespace
+from .identity import (
+    normalize_arxiv_id,
+    normalize_doi,
+    normalize_external_id,
+    normalize_repo_id,
+    source_namespace,
+)
 from .models import (
     CANONICAL_CATEGORIES,
     SCHEMA_VERSION,
@@ -21,6 +27,17 @@ from .models import (
     PublicationBundle,
     PublicationValidationError,
     SourceMetadata,
+)
+from .pipeline import (
+    PublicationRunCollector,
+    StructuredItemResult,
+    StructuredResultError,
+    now_utc,
+    parse_structured_response,
+    results_from_response,
+    source_ref,
+    structured_entries,
+    structured_prompt,
 )
 from .serialization import (
     briefing_content_hash,
@@ -34,6 +51,28 @@ from .store import (
     PublicationStore,
     PublicationStoreError,
     StoreResult,
+)
+from .delivery import (
+    CorruptDeliveryStateError,
+    DeliveryState,
+    DeliveryStateStore,
+    DeliveryStoreError,
+    DeliveryValidationError,
+    DELIVERY_SCHEMA_VERSION,
+    delivery_key,
+    delivery_state_from_dict,
+    delivery_state_to_dict,
+    serialize_delivery_state,
+    validate_briefing_identity,
+    validate_delivery_state,
+    validate_sink,
+)
+from .publishers import (
+    DeliveryCoordinator,
+    DiscordPublisher,
+    PublishResult,
+    Publisher,
+    sanitize_error,
 )
 from .validation import (
     validate_briefing,
@@ -56,19 +95,50 @@ __all__ = [
     "PublicationFinalizer",
     "PublicationItemInput",
     "PublicationStore",
+    "PublicationRunCollector",
     "PublicationStoreError",
     "PublicationValidationError",
     "SCHEMA_VERSION",
     "SourceMetadata",
     "StoreResult",
     "StructuredPublicationAdapter",
+    "StructuredItemResult",
+    "StructuredResultError",
     "CorruptPublicationError",
     "deserialize_bundle",
     "serialize_bundle",
     "source_namespace",
+    "normalize_arxiv_id",
+    "normalize_doi",
+    "normalize_external_id",
+    "normalize_repo_id",
+    "source_ref",
+    "structured_entries",
+    "structured_prompt",
+    "parse_structured_response",
+    "results_from_response",
+    "now_utc",
     "validate_briefing",
     "validate_bundle",
     "validate_category",
     "validate_item",
     "validate_public_source_url",
+    "CorruptDeliveryStateError",
+    "DELIVERY_SCHEMA_VERSION",
+    "DeliveryCoordinator",
+    "DeliveryState",
+    "DeliveryStateStore",
+    "DeliveryStoreError",
+    "DeliveryValidationError",
+    "DiscordPublisher",
+    "PublishResult",
+    "Publisher",
+    "sanitize_error",
+    "delivery_key",
+    "delivery_state_from_dict",
+    "delivery_state_to_dict",
+    "serialize_delivery_state",
+    "validate_delivery_state",
+    "validate_briefing_identity",
+    "validate_sink",
 ]
